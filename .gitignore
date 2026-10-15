@@ -1,0 +1,27 @@
+# 本地环境变量：存放真实 MCP Token，严禁入库
+# （参赛声明「信息安全声明」）
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 探测产物（含服务端 schema，可能含内部字段，不入库）
+docs/mcp-schema.json
+
+# 本地专用文档目录：含参赛策略与个人信息，不对外发布
+docs-nocommit/
+
+# AI 工具上下文（本地专属，不进公开仓库）
+.claude/
+CLAUDE.md
+
+# 编辑器 / 系统
+.idea/
+.vscode/
+.DS_Store

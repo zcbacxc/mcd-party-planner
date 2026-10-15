@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+
+# 并发控制（沿用参考项目的策略）：
+# - PR：以 pr-<编号> 分组，amend + force-push 时取消旧运行，避免重复占用
+# - push 到 main：以 ref 名分组，每次推送都跑完，保证主干有明确的通过/失败信号
+# - workflow_dispatch：以 run_id 分组，手动触发永不被取消
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  # 单元测试矩阵：无需安装依赖（项目仅用标准库）、无需 Token、无需网络
+  test-matrix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -p "test_*.py" -v
+
+      - name: Verify CLI entry points
+        run: |
+          python -m src.cli --help
+          python -m src.cli plan --help
+          python -m src.cli selfcheck
+
+  # 真实 MCP 端到端冒烟：需要 Token，未配置该 Secret 时自动跳过（脚本以 0 退出）
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: ${{ secrets.MCD_MCP_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run MCP smoke test
+        env:
+          MCD_MCP_TOKEN: ${{ secrets.MCD_MCP_TOKEN }}
+        run: python tests/smoke.py --city 成都 --keyword 春熙路 --headcount 8 --budget 400
+
+  # 汇总门禁：名称固定为 test，便于配置分支保护时作为必需检查项
+  # （矩阵任务会生成 test-matrix (3.9) 这类名称，无法直接作为必需检查）
+  test:
+    needs: [test-matrix]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Check results
+        run: |
+          if [[ "${{ needs.test-matrix.result }}" == "success" ]]; then
+            echo "Unit tests passed on all Python versions"
+          else
+            echo "Unit tests: ${{ needs.test-matrix.result }}"
+            exit 1
+          fi
