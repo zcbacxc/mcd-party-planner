@@ -5,11 +5,16 @@
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-10-20
+
 ### Fixed
 
 - **CI 工作流校验失败导致 0 秒红叉**：`jobs.<job_id>.if` 中使用 `secrets` 上下文不被 GitHub 允许，
   整份工作流校验不通过（0 job、0 秒失败）。改为步骤级探测 Token 并写入 `GITHUB_OUTPUT`，
   未配置 Secret 时跳过冒烟而非让工作流失效。
+- **CI 在 Python 3.9 上无法启动**：`ubuntu-latest` 已切换至 Ubuntu 26.04，其 `setup-python`
+  版本清单不再提供 3.9 / 3.10 的 x64 构建。矩阵改为显式指定运行环境（3.9 / 3.10 → `ubuntu-22.04`，
+  3.11+ → `ubuntu-latest`），保留 3.9 兼容性声明与验证。
 - **主题活动链路单点失败即中断**：原实现只探测第一家门店的第一个日期，首店无场次或首场余位不足
   就直接返回失败。改为「门店 × 日期 × 场次」逐级探测（最多 3 店 × 3 日），
   并优先选择 `leftNum ≥ 人数` 的场次；显式指定 `--date` 时不会改到其他日期。
@@ -46,5 +51,6 @@
 - 活动标题改取 `articleDto.title`（`activityTitle` 实际为空）。
 - 城市未命中时不再静默取首个城市，避免把派对预约到异地。
 
-[Unreleased]: https://github.com/zcbacxc/mcd-party-planner/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/zcbacxc/mcd-party-planner/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/zcbacxc/mcd-party-planner/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/zcbacxc/mcd-party-planner/releases/tag/v1.0.0

@@ -20,13 +20,27 @@ permissions:
 
 jobs:
   # 单元测试矩阵：无需安装依赖（项目仅用标准库）、无需 Token、无需网络
+  #
+  # 运行环境说明：`ubuntu-latest` 已切换到 Ubuntu 26.04，其 setup-python 版本清单中
+  # 不再提供 3.9 / 3.10 的 x64 构建（会报 "The version '3.9' ... was not found"）。
+  # 因此旧版本固定在 ubuntu-22.04 上验证，新版本使用 latest。
   test-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        include:
+          - python-version: "3.9"
+            os: ubuntu-22.04
+          - python-version: "3.10"
+            os: ubuntu-22.04
+          - python-version: "3.11"
+            os: ubuntu-latest
+          - python-version: "3.12"
+            os: ubuntu-latest
+          - python-version: "3.13"
+            os: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
