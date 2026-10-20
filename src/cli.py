@@ -17,18 +17,41 @@ import json
 import os
 import sys
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 from . import __version__, config, party_planner
 from .mcp_client import McpClient, McpError, OFFICIAL_RATE_LIMIT_PER_MINUTE
 
+# 允许携带 Bearer Token 的接入地址：https + mcd.cn 域（避免 Token 被引导到任意主机）
+TRUSTED_ENDPOINT_HOST = "mcd.cn"
+
+
+def is_trusted_endpoint(endpoint: str) -> bool:
+    """判断接入地址是否属于受信范围：必须 https，且主机为 mcd.cn 或其子域。"""
+    parsed = urlparse(endpoint)
+    if parsed.scheme != "https":
+        return False
+    host = (parsed.hostname or "").lower()
+    return host == TRUSTED_ENDPOINT_HOST or host.endswith("." + TRUSTED_ENDPOINT_HOST)
+
 
 def build_client(args: argparse.Namespace) -> McpClient:
     config.load_local_env(os.getcwd())
-    return McpClient(
+    endpoint = args.endpoint or os.environ.get("MCD_MCP_ENDPOINT") or ""
+    if endpoint and not is_trusted_endpoint(endpoint) \
+            and not getattr(args, "allow_custom_endpoint", False):
+        raise ValueError(
+            f"接入地址 {endpoint} 不在受信范围（https://*.mcd.cn）；"
+            "Token 会随请求发往该地址。如确需自定义，请显式加 --allow-custom-endpoint"
+        )
+    client = McpClient(
         endpoint=args.endpoint,
         rate_limit_per_minute=args.rate_limit,
         timeout=args.timeout,
     )
+    # 挂到 args 上，便于 main() 在 finally 中终止会话（不依赖全局变量）
+    args.client = client
+    return client
 
 
 def require_token(client: McpClient) -> None:
@@ -130,6 +153,10 @@ def add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--rate-limit", type=int, default=300,
                         help=f"每分钟请求上限，默认 300（官方上限 {OFFICIAL_RATE_LIMIT_PER_MINUTE}）")
     parser.add_argument("--timeout", type=float, default=15.0, help="单次请求超时秒数")
+    parser.add_argument("--verbose", action="store_true",
+                        help="在 stderr 输出调用统计（次数 / 重试 / 限流等待 / 耗时）")
+    parser.add_argument("--allow-custom-endpoint", action="store_true",
+                        help="允许把 Token 发往非 https://*.mcd.cn 的地址（仅调试用）")
 
 
 def make_parser() -> argparse.ArgumentParser:
@@ -199,6 +226,21 @@ def main(argv: Optional[List[str]] = None) -> int:
     except McpError as exc:
         print(f"MCP 调用失败：{exc}", file=sys.stderr)
         return 1
+    finally:
+        client = getattr(args, "client", None)
+        if client is not None:
+            if getattr(args, "verbose", False):
+                print(_format_stats(getattr(client, "stats", {})), file=sys.stderr)
+            closer = getattr(client, "close", None)
+            if callable(closer):
+                closer()
+
+
+def _format_stats(stats: Dict[str, int]) -> str:
+    """调用统计单行格式，供 `--verbose` 输出（只写 stderr，不污染 stdout）。"""
+    return (f"calls={stats.get('calls', 0)} retries={stats.get('retries', 0)} "
+            f"rateLimitWaits={stats.get('rateLimitWaits', 0)} "
+            f"elapsedMs={stats.get('elapsedMs', 0)}")
 
 
 if __name__ == "__main__":

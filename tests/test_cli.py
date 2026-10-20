@@ -9,6 +9,7 @@
 全部用例离线运行（注入替身客户端），不读 `.env`、不发网络请求。
 """
 
+import argparse
 import io
 import json
 import os
@@ -55,10 +56,14 @@ class StubClient:
     def __init__(self, dispatch):
         self.dispatch = dispatch
         self.calls = []
+        self.closed = False
 
     def call_tool(self, name, arguments=None, **kwargs):
         self.calls.append(name)
         return self.dispatch(name, arguments or {})
+
+    def close(self):
+        self.closed = True
 
 
 def dispatch(name, arguments):
@@ -84,7 +89,15 @@ def dispatch(name, arguments):
 def run(argv, client=None):
     """执行 CLI，返回 (退出码, stdout, stderr)；SystemExit 归一化为退出码。"""
     out, err = io.StringIO(), io.StringIO()
-    with mock.patch.object(cli, "build_client", return_value=client or StubClient(dispatch)), \
+    target = client or StubClient(dispatch)
+
+    def factory(args):
+        # 真实 build_client 会把 client 挂到 args 上，替身必须复现这一行为，
+        # 否则 main() 的 finally 拿不到 client（--verbose 与 close 都会失效）
+        args.client = target
+        return target
+
+    with mock.patch.object(cli, "build_client", side_effect=factory), \
             redirect_stdout(out), redirect_stderr(err):
         try:
             code = cli.main(argv)
@@ -210,6 +223,64 @@ class OutputContractTest(unittest.TestCase):
         self.assertIn(code, (0, 1))
         if code == 0:
             self.assertIn("【活动日历组织建议】", out)
+
+
+class EndpointGuardTest(unittest.TestCase):
+    """--endpoint 白名单：避免 Bearer Token 被引导到非 mcd.cn 主机。"""
+
+    @staticmethod
+    def _args(**overrides):
+        base = {"endpoint": None, "rate_limit": 300, "timeout": 15.0}
+        base.update(overrides)
+        return argparse.Namespace(**base)
+
+    def test_trusted_endpoint_predicate(self):
+        self.assertTrue(cli.is_trusted_endpoint("https://mcp.mcd.cn"))
+        self.assertTrue(cli.is_trusted_endpoint("https://open.mcd.cn/mcp"))
+        self.assertFalse(cli.is_trusted_endpoint("http://mcp.mcd.cn"), "必须 https")
+        self.assertFalse(cli.is_trusted_endpoint("https://evil-mcd.cn"), "后缀匹配不得放宽")
+        self.assertFalse(cli.is_trusted_endpoint("https://example.com"))
+
+    def test_rejects_untrusted_endpoint(self):
+        with self.assertRaises(ValueError) as ctx:
+            cli.build_client(self._args(endpoint="http://mcp.mcd.cn"))
+        self.assertIn("不在受信范围", str(ctx.exception))
+
+    def test_allows_mcd_host(self):
+        client = cli.build_client(self._args(endpoint="https://mcp.mcd.cn"))
+        self.assertEqual(client.endpoint, "https://mcp.mcd.cn")
+
+    def test_allows_custom_with_explicit_flag(self):
+        client = cli.build_client(self._args(endpoint="https://127.0.0.1:8443",
+                                             allow_custom_endpoint=True))
+        self.assertEqual(client.endpoint, "https://127.0.0.1:8443")
+
+
+class VerboseTest(unittest.TestCase):
+    """--verbose 的调用统计只写 stderr，不污染 stdout 报告；退出时终止会话。"""
+
+    def test_verbose_stats_go_to_stderr(self):
+        client = StubClient(dispatch)
+        client.stats = {"calls": 3, "retries": 1, "rateLimitWaits": 0, "elapsedMs": 12}
+        code, out, err = run(["plan", "--city", "成都", "--keyword", "春熙路",
+                              "--headcount", "4", "--budget", "200", "--verbose"], client)
+        self.assertEqual(code, 0)
+        self.assertIn("calls=3", err)
+        self.assertIn("retries=1", err)
+        self.assertNotIn("calls=3", out, "统计不得混入 stdout")
+        self.assertIn("【团餐方案】", out)
+
+    def test_without_verbose_no_stats(self):
+        code, _, err = run(["plan", "--city", "成都", "--keyword", "春熙路",
+                            "--headcount", "4", "--budget", "200"])
+        self.assertEqual(code, 0)
+        self.assertNotIn("calls=", err)
+
+    def test_client_closed_after_run(self):
+        client = StubClient(dispatch)
+        run(["plan", "--city", "成都", "--keyword", "春熙路",
+             "--headcount", "4", "--budget", "200"], client)
+        self.assertTrue(client.closed, "退出时必须终止会话")
 
 
 if __name__ == "__main__":

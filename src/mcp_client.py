@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import time
 import urllib.error
 import urllib.request
@@ -22,6 +23,23 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from . import __version__
 
 DEFAULT_ENDPOINT = "https://mcp.mcd.cn"
+
+# 协议版本：客户端只声明自己实现的那一版，服务端返回其它版本时直接报错
+# （2025-06-18 规范：客户端若不支持服务端返回的版本，SHOULD 断开）。
+PROTOCOL_VERSION = "2025-06-18"
+SUPPORTED_PROTOCOL_VERSIONS: Tuple[str, ...] = (PROTOCOL_VERSION,)
+
+# tools/list 分页上限：防止服务端返回异常 cursor 时死循环。
+MAX_TOOL_PAGES = 10
+
+# 429 / 5xx 退避：基数 0.5s，指数增长并叠加 Full Jitter（AWS 推荐），
+# 避免多进程 / CI 并发时所有客户端在同一时刻重试。
+BACKOFF_BASE = 0.5
+
+
+def _backoff_delay(attempt: int) -> float:
+    """第 attempt 次重试的等待秒数：`uniform(0, base * 2^attempt)`（Full Jitter）。"""
+    return random.uniform(0.0, BACKOFF_BASE * (2 ** attempt))
 
 # 官方硬限：每个 Token 每分钟最多 600 次请求（超出返回 429）。
 OFFICIAL_RATE_LIMIT_PER_MINUTE = 600
@@ -183,6 +201,21 @@ def _http_transport(endpoint: str, payload: Dict[str, Any], headers: Dict[str, s
         raise McpNetworkError(f"网络不可达：{reason}") from exc
 
 
+def _http_delete(endpoint: str, headers: Dict[str, str], timeout: float) -> int:
+    """尽力发送 HTTP DELETE 终止会话，返回状态码；网络异常返回 0。
+
+    会话终止失败不应影响主流程（结果已产出），因此这里吞掉所有网络异常。
+    """
+    request = urllib.request.Request(endpoint, headers=headers, method="DELETE")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.status
+    except urllib.error.HTTPError as exc:  # 4xx / 5xx 也是「有响应」
+        return exc.code
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return 0
+
+
 class McpClient:
     """麦当劳 MCP 客户端（Streamable HTTP + Bearer Token）。"""
 
@@ -205,6 +238,15 @@ class McpClient:
         self._session_id: Optional[str] = None
         self._request_id = 0
         self.initialized = False
+        # 握手协商出的协议版本；未握手时为 None（此时不发送协议头）
+        self.protocol_version: Optional[str] = None
+        # 调用统计：供 CLI `--verbose` 输出到 stderr，不进入 stdout 报告
+        self.stats: Dict[str, int] = {
+            "calls": 0,
+            "retries": 0,
+            "rateLimitWaits": 0,
+            "elapsedMs": 0,
+        }
 
     # -- 基础 ---------------------------------------------------------------
     @property
@@ -220,6 +262,9 @@ class McpClient:
             headers["Authorization"] = f"Bearer {self._token}"
         if self._session_id:
             headers["Mcp-Session-Id"] = self._session_id
+        # 2025-06-18 规范：HTTP 传输下，握手后的所有请求都必须带上协商出的版本
+        if self.protocol_version:
+            headers["MCP-Protocol-Version"] = self.protocol_version
         return headers
 
     def _next_id(self) -> int:
@@ -235,10 +280,15 @@ class McpClient:
         """
         last_body = ""
         for attempt in range(self.max_retries + 1):
-            self.limiter.acquire(self._sleep)
+            waited = self.limiter.acquire(self._sleep)
+            if waited > 0:
+                self.stats["rateLimitWaits"] += 1
+            started = time.monotonic()
             status, raw, resp_headers = self._transport(
                 self.endpoint, payload, self._headers(), self.timeout
             )
+            self.stats["calls"] += 1
+            self.stats["elapsedMs"] += int((time.monotonic() - started) * 1000)
             session_id = resp_headers.get("Mcp-Session-Id") or resp_headers.get("mcp-session-id")
             if session_id:
                 self._session_id = session_id
@@ -250,7 +300,8 @@ class McpClient:
             if status == 429:
                 if attempt >= self.max_retries:
                     raise McpRateLimitError("429：重试后仍触发限流（600 次/分钟）")
-                self._sleep(0.5 * (2 ** attempt))
+                self.stats["retries"] += 1
+                self._sleep(_backoff_delay(attempt))
                 continue
             if status >= 500:
                 if not retry_on_server_error:
@@ -259,7 +310,8 @@ class McpClient:
                         "请求可能已被受理，请先到麦当劳官方渠道核对，再决定是否重试"
                     )
                 if attempt < self.max_retries:
-                    self._sleep(0.5 * (2 ** attempt))
+                    self.stats["retries"] += 1
+                    self._sleep(_backoff_delay(attempt))
                     continue
             if status >= 400:
                 raise McpError(f"HTTP {status}：{body[:300]}")
@@ -284,20 +336,42 @@ class McpClient:
         return self._send(payload, retry_on_server_error=retry_on_server_error)
 
     def initialize(self) -> bool:
-        """执行 MCP initialize 握手并发送 initialized 通知。"""
+        """执行 MCP initialize 握手、校验协议版本并发送 initialized 通知。
+
+        规范要求客户端声明自己支持的版本，服务端若返回其它版本则客户端 SHOULD 断开；
+        这里以 `McpError` 中止并给出双方版本，避免在协议语义不一致时继续调用。
+        """
         result = self._rpc("initialize", {
-            "protocolVersion": "2025-06-18",
+            "protocolVersion": PROTOCOL_VERSION,
             "capabilities": {},
             "clientInfo": {"name": "mcd-party-planner", "version": __version__},
         })
+        server_version = result.get("protocolVersion") if isinstance(result, dict) else None
+        if server_version and server_version not in SUPPORTED_PROTOCOL_VERSIONS:
+            raise McpError(
+                f"协议版本不兼容：服务端返回 {server_version}，"
+                f"客户端支持 {', '.join(SUPPORTED_PROTOCOL_VERSIONS)}"
+            )
+        self.protocol_version = server_version or PROTOCOL_VERSION
         self._rpc("notifications/initialized", notification=True)
         self.initialized = True
         return bool(result)
 
     # -- 工具 ---------------------------------------------------------------
     def list_tools(self) -> List[Dict[str, Any]]:
-        result = self._rpc("tools/list")
-        return list(result.get("tools") or [])
+        """列出全部工具，按 `nextCursor` 翻页（当前服务端一页返回 35 个，无 cursor）。"""
+        if not self.initialized and self._transport is _http_transport:
+            self.initialize()
+        tools: List[Dict[str, Any]] = []
+        cursor: Optional[str] = None
+        for _ in range(MAX_TOOL_PAGES):
+            params = {"cursor": cursor} if cursor else None
+            result = self._rpc("tools/list", params)
+            tools.extend(list(result.get("tools") or []))
+            cursor = result.get("nextCursor")
+            if not cursor:
+                break
+        return tools
 
     def call_tool(self, name: str, arguments: Optional[Dict[str, Any]] = None,
                   idempotent: Optional[bool] = None) -> Any:
@@ -315,17 +389,45 @@ class McpClient:
                            retry_on_server_error=idempotent)
         return _parse_tool_result(name, result)
 
+    def close(self) -> bool:
+        """尽力终止会话（HTTP DELETE），返回是否收到 2xx。
+
+        自定义 transport（测试替身）不发真实请求，只清理本地状态；
+        会话终止失败不应影响主流程，因此不抛异常。
+        """
+        if not self._session_id:
+            self.initialized = False
+            return False
+        headers = self._headers()
+        headers.pop("Content-Type", None)  # DELETE 无 body
+        status = 0
+        if self._transport is _http_transport:
+            status = _http_delete(self.endpoint, headers, self.timeout)
+        self._session_id = None
+        self.protocol_version = None
+        self.initialized = False
+        return 200 <= status < 300
+
     def probe(self) -> Dict[str, Any]:
-        """抓取服务端工具定义，用于校准 TOOL_ARG_SPEC（阶段 A 的 A5）。"""
+        """抓取服务端工具定义，用于校准 TOOL_ARG_SPEC（阶段 A 的 A5）。
+
+        除入参 schema 外，一并保留 `title` / `outputSchema` / `annotations`：
+        实测服务端 35/35 个工具都带 `outputSchema`（含「单位分」等字段说明），
+        丢掉它会让校准产物无法用于校验响应结构。
+        """
         tools = self.list_tools()
         return {
             "endpoint": self.endpoint,
+            "protocolVersion": self.protocol_version,
             "toolCount": len(tools),
             "tools": [
                 {
                     "name": t.get("name"),
+                    "title": t.get("title"),
                     "description": (t.get("description") or "")[:200],
                     "inputSchema": t.get("inputSchema") or {},
+                    "outputSchema": t.get("outputSchema") or {},
+                    "annotations": t.get("annotations") or {},
                 }
                 for t in tools
             ],

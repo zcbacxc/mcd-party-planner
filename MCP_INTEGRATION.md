@@ -95,7 +95,16 @@ query-nearby-stores(city, keyword) ┘        │
 ### 3.4 调用层保障
 
 - **节流**：滑动窗口节流器，默认 300 次 / 分钟（官方上限 600 的 50%）；
-- **退避**：429 按 0.5s → 1s → 2s 指数退避重试最多 3 次；5xx 同样退避；
+- **协议版本**：握手声明 `2025-06-18`；服务端返回客户端不支持的版本时立即中止并给出双方版本
+  （规范要求客户端此时 SHOULD 断开）。握手成功后所有请求携带 `MCP-Protocol-Version` 头；
+- **分页**：`tools/list` 跟随 `nextCursor` 翻页，上限 10 页（防异常 cursor 死循环）；
+- **会话终止**：CLI 退出时尽力发送 HTTP `DELETE` 结束会话，失败不影响已产出的结果；
+- **可观测**：`--verbose` 在 stderr 输出 `calls` / `retries` / `rateLimitWaits` / `elapsedMs`，
+  不污染 stdout 报告；
+- **退避**：429 按 0.5s → 1s → 2s 指数退避重试最多 3 次，并叠加 **Full Jitter**
+  （`uniform(0, base·2^attempt)`），避免多进程 / CI 并发时同步重试；5xx 同样退避；
+- **端点白名单**：`--endpoint` 仅接受 `https://*.mcd.cn`；其它地址必须显式加
+  `--allow-custom-endpoint`，否则以「参数错误」退出（码 2），防止 Bearer Token 被引导外发；
 - **重试分级**：读工具（查询 / 计价）遇 5xx 可安全重试；**写工具**（`party-order-create`、
   `create-order`、`mall-create-order`、`delivery-create-address`、`cancel-order` 等，
   登记于 `src/mcp_client.py:WRITE_TOOLS`）**只对 429 重试**，5xx 立即失败并提示
@@ -106,6 +115,8 @@ query-nearby-stores(city, keyword) ┘        │
 - **结果解析**：优先 `structuredContent`，其次解析 `content[].text`，兼容 SSE 与纯 JSON；
 - **入参收敛**：所有工具入参由 `src/mcp_client.py:TOOL_ARG_SPEC` 统一声明并过滤，
   未声明字段不会发送到服务端；校准只需改这一处；
+- **校准产物**：`probe` 导出的快照保留 `title` / `outputSchema` / `annotations`
+  （实测 35/35 个工具都带 `outputSchema`，含「单位分」等字段说明）；
 - **业务降级**：菜单为空、计价失败（如「每单限购 1 件」）、门店非营业、助餐服务不可用，
   均以 warning 形式呈现并跳过该方案，不中断整体流程。
 

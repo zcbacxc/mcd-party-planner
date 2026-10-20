@@ -262,5 +262,182 @@ class NormalizeTest(unittest.TestCase):
         self.assertEqual(mc.money_of({"data": {"payAmount": "36.00"}}), 36.0)
 
 
+class ProtocolVersionTest(unittest.TestCase):
+    """协议版本协商：声明版本、校验服务端返回值、握手后携带协议头。"""
+
+    @staticmethod
+    def _client(transport):
+        return mc.McpClient(token="T", transport=transport, sleep_fn=lambda s: None)
+
+    def test_initialize_stores_negotiated_version(self):
+        transport = FakeTransport([
+            (200, rpc_result({"protocolVersion": mc.PROTOCOL_VERSION, "capabilities": {}}), {}),
+        ])
+        client = self._client(transport)
+        self.assertTrue(client.initialize())
+        self.assertEqual(client.protocol_version, mc.PROTOCOL_VERSION)
+        self.assertEqual(transport.requests[0]["payload"]["params"]["protocolVersion"],
+                         mc.PROTOCOL_VERSION)
+
+    def test_initialize_rejects_unsupported_version(self):
+        """服务端返回客户端不支持的版本时中止，避免按错误语义继续调用。"""
+        transport = FakeTransport([(200, rpc_result({"protocolVersion": "2024-11-05"}), {})])
+        client = self._client(transport)
+        with self.assertRaises(mc.McpError) as ctx:
+            client.initialize()
+        self.assertIn("协议版本不兼容", str(ctx.exception))
+        self.assertIn("2024-11-05", str(ctx.exception))
+        self.assertFalse(client.initialized)
+
+    def test_protocol_header_sent_after_handshake(self):
+        transport = FakeTransport([
+            (200, rpc_result({"protocolVersion": mc.PROTOCOL_VERSION}), {}),
+            (202, "", {}),                                   # notifications/initialized
+            (200, rpc_result({"structuredContent": {"ok": True}}), {}),
+        ])
+        client = self._client(transport)
+        client.initialize()
+        client.call_tool("query-meals", {"storeCode": "S1"})
+        self.assertNotIn("MCP-Protocol-Version", transport.requests[0]["headers"])
+        self.assertEqual(transport.requests[-1]["headers"]["MCP-Protocol-Version"],
+                         mc.PROTOCOL_VERSION)
+
+    def test_no_protocol_header_before_handshake(self):
+        client = self._client(FakeTransport([]))
+        self.assertNotIn("MCP-Protocol-Version", client._headers())
+
+
+class ToolsPaginationTest(unittest.TestCase):
+    """tools/list 分页：跟随 nextCursor，且不超过页数上限。"""
+
+    @staticmethod
+    def _client(transport):
+        return mc.McpClient(token="T", transport=transport, sleep_fn=lambda s: None)
+
+    def test_follows_next_cursor(self):
+        transport = FakeTransport([
+            (200, rpc_result({"tools": [{"name": "a"}], "nextCursor": "c1"}), {}),
+            (200, rpc_result({"tools": [{"name": "b"}]}), {}),
+        ])
+        tools = self._client(transport).list_tools()
+        self.assertEqual([t["name"] for t in tools], ["a", "b"])
+        self.assertEqual(transport.requests[1]["payload"]["params"], {"cursor": "c1"})
+
+    def test_stops_at_page_limit(self):
+        """服务端若持续返回 cursor，客户端不得无限翻页。"""
+        script = [(200, rpc_result({"tools": [{"name": f"t{i}"}], "nextCursor": "again"}), {})
+                  for i in range(mc.MAX_TOOL_PAGES + 3)]
+        transport = FakeTransport(script)
+        tools = self._client(transport).list_tools()
+        self.assertEqual(len(tools), mc.MAX_TOOL_PAGES)
+        self.assertEqual(len(transport.requests), mc.MAX_TOOL_PAGES)
+
+
+class ProbeMetadataTest(unittest.TestCase):
+    """probe 必须保留 outputSchema / annotations / title，否则校准产物不完整。"""
+
+    def test_probe_keeps_full_tool_metadata(self):
+        tool = {"name": "t", "title": "T", "description": "d" * 300,
+                "inputSchema": {"type": "object"},
+                "outputSchema": {"type": "object", "properties": {}},
+                "annotations": {"readOnlyHint": True}}
+        transport = FakeTransport([(200, rpc_result({"tools": [tool]}), {})])
+        client = mc.McpClient(token="T", transport=transport, sleep_fn=lambda s: None)
+        snapshot = client.probe()
+        item = snapshot["tools"][0]
+        self.assertEqual(item["outputSchema"], {"type": "object", "properties": {}})
+        self.assertEqual(item["annotations"], {"readOnlyHint": True})
+        self.assertEqual(item["title"], "T")
+        self.assertEqual(len(item["description"]), 200, "描述仍截断到 200 字符")
+        self.assertEqual(snapshot["toolCount"], 1)
+
+
+class CloseTest(unittest.TestCase):
+    """会话终止：默认传输发 DELETE，自定义传输只清理本地状态。"""
+
+    def test_close_sends_delete_with_session_header(self):
+        client = mc.McpClient(token="T")
+        client._session_id = "sess-1"
+        client.protocol_version = mc.PROTOCOL_VERSION
+        with mock.patch.object(mc, "_http_delete", return_value=204) as delete:
+            self.assertTrue(client.close())
+        headers = delete.call_args[0][1]
+        self.assertEqual(headers["Mcp-Session-Id"], "sess-1")
+        self.assertNotIn("Content-Type", headers, "DELETE 不应带 JSON Content-Type")
+        self.assertIsNone(client._session_id)
+        self.assertFalse(client.initialized)
+
+    def test_close_without_session_is_noop(self):
+        client = mc.McpClient(token="T")
+        with mock.patch.object(mc, "_http_delete") as delete:
+            self.assertFalse(client.close())
+            delete.assert_not_called()
+
+    def test_close_ignores_transport_failure(self):
+        client = mc.McpClient(token="T")
+        client._session_id = "sess-1"
+        with mock.patch.object(mc, "_http_delete", return_value=0):
+            self.assertFalse(client.close())
+        self.assertIsNone(client._session_id)
+
+
+class StatsTest(unittest.TestCase):
+    """调用统计：次数 / 重试 / 限流等待，供 --verbose 使用。"""
+
+    def test_counts_calls_and_retries(self):
+        transport = FakeTransport([
+            (429, "rate limited", {}),
+            (200, rpc_result({"tools": []}), {}),
+        ])
+        client = mc.McpClient(token="T", transport=transport, sleep_fn=lambda s: None)
+        client.list_tools()
+        self.assertEqual(client.stats["calls"], 2)
+        self.assertEqual(client.stats["retries"], 1)
+        self.assertGreaterEqual(client.stats["elapsedMs"], 0)
+
+    def test_counts_rate_limit_waits(self):
+        now = [0.0]
+        slept = []
+
+        def sleep_fn(seconds):
+            slept.append(seconds)
+            now[0] += seconds
+
+        transport = FakeTransport([(200, rpc_result({"tools": []}), {}),
+                                   (200, rpc_result({"tools": []}), {})])
+        client = mc.McpClient(token="T", transport=transport, rate_limit_per_minute=1,
+                              sleep_fn=sleep_fn, clock=lambda: now[0])
+        client.list_tools()   # 第 1 次不等待
+        client.list_tools()   # 第 2 次触发滑动窗口等待
+        self.assertEqual(client.stats["rateLimitWaits"], 1)
+        self.assertTrue(slept)
+
+
+class BackoffJitterTest(unittest.TestCase):
+    """退避必须带抖动，且等待时长不超过指数上界。"""
+
+    def test_sleep_within_jitter_bounds(self):
+        slept = []
+        transport = FakeTransport([(429, "rate limited", {}) for _ in range(3)]
+                                  + [(200, rpc_result({"tools": []}), {})])
+        client = mc.McpClient(token="T", transport=transport, max_retries=3,
+                              sleep_fn=slept.append)
+        client.list_tools()
+        self.assertEqual(len(slept), 3)
+        for attempt, seconds in enumerate(slept):
+            self.assertGreaterEqual(seconds, 0.0)
+            self.assertLessEqual(seconds, mc.BACKOFF_BASE * (2 ** attempt))
+
+    def test_backoff_uses_random_uniform(self):
+        with mock.patch.object(mc.random, "uniform", return_value=0.0) as uniform:
+            transport = FakeTransport([(429, "x", {}),
+                                       (200, rpc_result({"tools": []}), {})])
+            client = mc.McpClient(token="T", transport=transport,
+                                  sleep_fn=lambda s: None)
+            client.list_tools()
+        uniform.assert_called()
+        self.assertEqual(uniform.call_args[0][0], 0.0)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

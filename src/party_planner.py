@@ -58,6 +58,10 @@ COMBO_SPECS: Dict[str, Tuple[str, ...]] = {
 
 NAME_KEYS = ("name", "storeName", "shortName", "productName", "spuName", "title")
 
+# 下单载荷中不得外显的字段：服务端在场次对象里返回的门店员工工号（内部信息）。
+# 只剔除这三个键，其余字段原样保留——避免白名单裁剪误删服务端下单所需的字段。
+PARTY_TIME_INFO_HIDDEN_KEYS = ("cookEmpNo", "opEmpNo", "rgmEmpNo")
+
 
 # ---- 通用辅助 ---------------------------------------------------------------
 def _data_of(payload: Any) -> Any:
@@ -378,7 +382,9 @@ def plan_party_booking(client: Any, city_name: str, spu_id: Optional[Any] = None
         "timeStart": session.get("timeStart"),
         "timeEnd": session.get("timeEnd"),
         "count": count,
-        "partyTimeInfo": session,
+        # 场次对象原样回传，但剔除门店员工工号（实测服务端会返回 cookEmpNo / opEmpNo / rgmEmpNo）
+        "partyTimeInfo": {k: v for k, v in session.items()
+                          if k not in PARTY_TIME_INFO_HIDDEN_KEYS},
     }
 
     result: Dict[str, Any] = {
@@ -439,7 +445,8 @@ def suggest_calendar_plan(client: Any, city: str, keyword: str, store_limit: int
     suggestions: List[Dict[str, Any]] = []
     for day in days:
         titles = [_event_title(e) for e in as_list(day.get("events"))]
-        titles = [t for t in titles if t][:5]
+        # 服务端可能对同一活动返回多条 event（标题重复），去重后再截断，避免报告里同名活动重复出现
+        titles = list(dict.fromkeys(t for t in titles if t))[:5]
         date_text = str(day.get("dateText") or "")
         suggestions.append({
             "date": day.get("date"),

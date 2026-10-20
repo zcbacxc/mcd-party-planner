@@ -5,6 +5,31 @@
 
 ## [Unreleased]
 
+### Added
+
+- **协议版本协商**：握手声明 `2025-06-18`，服务端返回不支持的版本时立即中止并给出双方版本；
+  握手成功后所有请求携带 `MCP-Protocol-Version` 头（2025-06-18 规范要求）。
+- **`tools/list` 分页**：跟随 `nextCursor` 翻页，上限 10 页，防止异常 cursor 导致死循环。
+- **会话终止**：新增 `McpClient.close()`，CLI 退出时尽力发送 HTTP `DELETE`，失败不影响结果输出。
+- **`--verbose` 调用统计**：在 stderr 输出 `calls` / `retries` / `rateLimitWaits` / `elapsedMs`，
+  便于自证限流安全；stdout 报告不受影响。
+- **`probe` 保留完整工具元数据**：快照新增 `title` / `outputSchema` / `annotations`
+  （实测服务端 35/35 个工具都有 `outputSchema`）。
+- **端点白名单**：`--endpoint` 仅接受 `https://*.mcd.cn`，其它地址需显式加
+  `--allow-custom-endpoint`，避免 Bearer Token 被引导到任意主机。
+- **Tests**：27 项用例。协议协商与版本拒绝、协议头时机、分页与页数上限、`probe` 元数据、
+  会话终止、调用统计、`--verbose` 输出分流、端点白名单、载荷剔除员工工号、日历标题去重、
+  退避抖动边界、文档契约。测试总数 72 → **99 项**。
+
+### Changed
+
+- **重试退避改为 Full Jitter**：等待时长由固定 `0.5·2^n` 改为 `uniform(0, 0.5·2^n)`，
+  避免多客户端同时重试；重试次数与总时长上界不变。
+
+- **下单载荷剔除门店员工工号**：服务端场次对象中的 `cookEmpNo` / `opEmpNo` / `rgmEmpNo`
+  不再随 `orderPayload.partyTimeInfo` 外显；其余字段原样保留，避免误删下单所需信息。
+- **活动日历标题去重**：同一活动被服务端返回多条 event 时，报告中的同名标题只出现一次。
+
 ## [1.1.1] - 2026-10-20
 
 ### Changed

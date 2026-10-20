@@ -156,7 +156,8 @@ PSTORE = {"success": True, "data": [
 PDATE = {"success": True, "data": [{"date": "2026-10-16", "storeCode": "3450261"}]}
 PSESSION = {"success": True, "data": [
     {"id": 36884158, "timeStart": "12:00", "timeEnd": "13:30", "price": 5000,
-     "leftNum": 12, "partyMin": 5, "partyMax": 12}]}
+     "leftNum": 12, "partyMin": 5, "partyMax": 12,
+     "cookEmpNo": "", "opEmpNo": "", "rgmEmpNo": "12593358"}]}
 PORDER = {"success": True, "data": {"orderNo": "ORDER-1"}}
 SKU = {"success": True, "data": {"skuList": [{"skuId": 2027}]}}
 
@@ -229,6 +230,17 @@ class PartyBookingTest(unittest.TestCase):
         text = pp.render_party_report(pp.plan_party_booking(self.client, "成都市"))
         self.assertIn("【主题活动预约】", text)
         self.assertIn("dry_run=True", text)
+
+    def test_payload_excludes_staff_ids(self):
+        """场次对象里的门店员工工号不得出现在下单载荷与报告中。"""
+        result = pp.plan_party_booking(self.client, "成都市", count=6)
+        info = result["orderPayload"]["partyTimeInfo"]
+        for key in pp.PARTY_TIME_INFO_HIDDEN_KEYS:
+            self.assertNotIn(key, info)
+        # 其余字段原样保留，确保真实下单所需信息不丢
+        self.assertEqual(info["id"], 36884158)
+        self.assertEqual(info["price"], 5000)
+        self.assertNotIn("EmpNo", pp.render_party_report(result))
 
 
 CALENDAR = {"success": True, "data": {"dailyList": [
@@ -403,6 +415,23 @@ class PartySelectionFallbackTest(unittest.TestCase):
                                        date="2026-12-31", count=6)
         self.assertFalse(result["ok"])
         self.assertIn("2026-12-31", result["reason"])
+
+
+    def test_duplicate_event_titles_collapsed(self):
+        """服务端对同一活动可能返回多条 event，报告里同名标题只应出现一次。"""
+        dup = {"success": True, "data": {"dailyList": [
+            {"date": "2026-10-20", "dateText": "2026年10月20日 今日",
+             "events": [{"activityTitle": "同名活动"}, {"activityTitle": "同名活动"},
+                        {"activityTitle": "另一个活动"}]}]}}
+
+        def dispatch(name, arguments):
+            if name == "campaign-calendar":
+                return dup
+            return calendar_dispatch(name, arguments)
+
+        result = pp.suggest_calendar_plan(StubClient(dispatch), "成都", "春熙路")
+        self.assertEqual(result["days"][0]["events"], ["同名活动", "另一个活动"])
+        self.assertEqual(pp.render_calendar_report(result).count("同名活动"), 1)
 
 
 if __name__ == "__main__":
