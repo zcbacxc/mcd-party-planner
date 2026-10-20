@@ -1,8 +1,6 @@
 name: Release
 
 # tag 推送触发：从 CHANGELOG.md 提取对应版本小节，自动创建 GitHub Release。
-# 本地化自 movie-narrator 的 publish.yml——保留「tag → 提取变更记录 → 创建 Release」一环，
-# 去掉 PyPI / TestPyPI 发布链（本项目不打包、无发布产物）。
 #
 # 约定（与 .claude/rules/release.md 一致）：
 # - 正式版 tag `vX.Y.Z`；预发布 tag `vX.Y.Z-rcN`（创建 prerelease）；

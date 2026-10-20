@@ -7,7 +7,7 @@ on:
     branches: ["main"]
   workflow_dispatch:
 
-# 并发控制（沿用参考项目的策略）：
+# 并发控制策略：
 # - PR：以 pr-<编号> 分组，amend + force-push 时取消旧运行，避免重复占用
 # - push 到 main：以 ref 名分组，每次推送都跑完，保证主干有明确的通过/失败信号
 # - workflow_dispatch：以 run_id 分组，手动触发永不被取消
