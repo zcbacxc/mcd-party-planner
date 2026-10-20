@@ -97,6 +97,13 @@ class GroupMealTest(unittest.TestCase):
         flags = [p["withinBudget"] for p in result["plans"]]
         self.assertEqual(flags, sorted(flags, key=lambda f: not f))
 
+    def test_zero_budget_is_not_unlimited(self):
+        """budget=0 是「零预算」，不是「不限预算」。"""
+        result = pp.plan_group_meal(self.client, "成都", "春熙路", headcount=4, budget=0)
+        self.assertEqual(result["affordableCount"], 0)
+        self.assertTrue(all(not p["withinBudget"] for p in result["plans"]))
+        self.assertIsNotNone(result["recommended"], "超预算时仍应给出最便宜方案作参考")
+
     def test_missing_role_produces_degradation_warning(self):
         menu_without_dessert = {"success": True, "data": {"categories": [
             {"name": "巨无霸\n牛鱼肉堡", "meals": [{"code": "M1"}]},
@@ -295,6 +302,26 @@ class CalendarTest(unittest.TestCase):
         text = pp.render_calendar_report(result)
         self.assertIn("【活动日历组织建议】", text)
         self.assertIn("企业团餐助餐服务", text)
+
+    def test_report_groups_days_and_collapses_advice(self):
+        """13 天活动应按「今日 / 未来 / 往期」分组，建议每组只出现一次。"""
+        days = [{"date": "2026-10-19", "dateText": "2026年10月19日 往期回顾",
+                 "events": ["旧活动"], "advice": "已过期活动，仅作参考"}]
+        days.append({"date": "2026-10-20", "dateText": "2026年10月20日 今日",
+                     "events": ["今日活动"], "advice": "今日可参与，建议立即组织"})
+        for i in range(1, 13):
+            days.append({"date": f"2026-10-{20 + i}", "dateText": f"2026年10月{20 + i}日",
+                         "events": [f"活动{i}"], "advice": "未来活动，建议提前 3–5 天预约"})
+        result = {"city": "成都", "keyword": "春熙路", "storeCount": 2,
+                  "days": days, "mealAssistance": [{"note": "无地址"}]}
+
+        text = pp.render_calendar_report(result)
+        self.assertIn("■ 今日（1 天）", text)
+        self.assertIn("■ 未来（12 天）", text)
+        self.assertIn("■ 往期（1 天）", text)
+        self.assertIn(f"…另有 {12 - pp.CALENDAR_FUTURE_PREVIEW} 天未来活动已省略", text)
+        self.assertEqual(text.count("建议：未来活动，建议提前"), 1, "同组建议只应出现一次")
+        self.assertEqual(text.count("建议："), 3, "三个分组各一条建议")
 
 
 class RoleMappingTest(unittest.TestCase):

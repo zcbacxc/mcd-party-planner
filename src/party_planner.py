@@ -225,7 +225,8 @@ def plan_group_meal(client: Any, city: str, keyword: str, headcount: int, budget
                 "combo": combo,
                 "total": round(total, 2),
                 "perPerson": round(total / headcount, 2) if headcount else 0.0,
-                "withinBudget": total <= budget if budget else True,
+                # budget=0 表示「零预算」而非「不限预算」，故用 is not None 判定
+                "withinBudget": total <= budget if budget is not None else True,
                 "items": [{"name": cache.get(code), "category": role, "quantity": headcount}
                           for code, role, _cat in picked],
             })
@@ -507,6 +508,19 @@ def _event_title(event: Dict[str, Any]) -> str:
     return str(event.get("activityCode") or "").strip()
 
 
+# 未来活动默认展开天数（其余折叠为一行提示，避免报告过长）
+CALENDAR_FUTURE_PREVIEW = 5
+
+
+def _calendar_bucket(date_text: str) -> str:
+    """按服务端 dateText 归类：today / future / past。"""
+    if "往期" in date_text:
+        return "past"
+    if "今日" in date_text:
+        return "today"
+    return "future"
+
+
 def _advice_for(date_text: str, store_count: int) -> str:
     if "往期" in date_text:
         return "已过期活动，仅作参考；可关注同系列后续活动"
@@ -516,6 +530,11 @@ def _advice_for(date_text: str, store_count: int) -> str:
 
 
 def render_calendar_report(result: Dict[str, Any]) -> str:
+    """渲染活动日历建议：按「今日 / 未来 / 往期」分组，同组只输出一次建议。
+
+    真实服务端一次返回 10+ 天，逐日重复同一句建议既冗长又淹没重点；分组后
+    建议文案只出现一次，未来活动默认只展开最近 `CALENDAR_FUTURE_PREVIEW` 天。
+    """
     lines = [
         "【活动日历组织建议】",
         f"城市：{result['city']}　关键词：{result['keyword']}　附近门店：{result['storeCount']}",
@@ -523,12 +542,27 @@ def render_calendar_report(result: Dict[str, Any]) -> str:
     ]
     if not result["days"]:
         lines.append("未查询到活动日历数据。")
+
+    buckets: Dict[str, List[Dict[str, Any]]] = {"today": [], "future": [], "past": []}
     for day in result["days"]:
-        events = "、".join(day["events"]) or "（无活动标题）"
-        lines.append(f"· {day.get('date')}　{day.get('dateText')}")
-        lines.append(f"  活动：{events}")
-        lines.append(f"  建议：{day['advice']}")
-    lines += ["", "企业团餐助餐服务："]
+        buckets[_calendar_bucket(str(day.get("dateText") or ""))].append(day)
+
+    for key, title, preview in (("today", "今日", 0),
+                                ("future", "未来", CALENDAR_FUTURE_PREVIEW),
+                                ("past", "往期", 0)):
+        days = buckets[key]
+        if not days:
+            continue
+        lines.append(f"■ {title}（{len(days)} 天）")
+        for day in (days[:preview] if preview else days):
+            events = "、".join(day["events"]) or "（无活动标题）"
+            lines.append(f"  · {day.get('date')}　{events}")
+        if preview and len(days) > preview:
+            lines.append(f"  …另有 {len(days) - preview} 天未来活动已省略")
+        lines.append(f"  建议：{days[0]['advice']}")
+        lines.append("")
+
+    lines.append("企业团餐助餐服务：")
     for item in result["mealAssistance"]:
         if "store" not in item:
             lines.append(f"· {item.get('note')}")

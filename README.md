@@ -237,7 +237,7 @@ mcd-party-planner/
 ## 六、运行测试
 
 ```bash
-python -m unittest discover -s tests -p "test_*.py"   # 单元测试 67 项（无需 Token）
+python -m unittest discover -s tests -p "test_*.py"   # 单元测试 72 项（无需 Token）
 python tests/smoke.py                                  # 端到端冒烟（需真实 Token）
 ```
 

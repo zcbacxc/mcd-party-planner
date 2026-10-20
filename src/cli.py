@@ -1,6 +1,7 @@
 """命令行入口。
 
 子命令：
+- version ：显示版本号
 - selfcheck：环境自检（Token 是否配置，不回显明文）
 - tools   ：列出服务端工具（校准 TOOL_ARG_SPEC / 阶段 A 的 A5）
 - probe   ：导出工具 inputSchema 到 docs/mcp-schema.json（若目录存在则写入）
@@ -17,7 +18,7 @@ import os
 import sys
 from typing import Any, Dict, List, Optional
 
-from . import config, party_planner
+from . import __version__, config, party_planner
 from .mcp_client import McpClient, McpError, OFFICIAL_RATE_LIMIT_PER_MINUTE
 
 
@@ -40,6 +41,11 @@ def require_token(client: McpClient) -> None:
             file=sys.stderr,
         )
         raise SystemExit(2)
+
+
+def cmd_version(args: argparse.Namespace) -> int:
+    print(f"mcd-party-planner {__version__}")
+    return 0
 
 
 def cmd_selfcheck(args: argparse.Namespace) -> int:
@@ -131,7 +137,12 @@ def make_parser() -> argparse.ArgumentParser:
         prog="mcd-party-planner",
         description="基于麦当劳 MCP 的聚会 / 团餐组织助手",
     )
+    # 与 `version` 子命令等价，便于 `mcd-party-planner --version` 直接查看
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
+
+    p = sub.add_parser("version", help="显示版本号")
+    p.set_defaults(func=cmd_version)
 
     p = sub.add_parser("selfcheck", help="环境自检")
     p.set_defaults(func=cmd_selfcheck)
@@ -181,6 +192,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = make_parser().parse_args(argv)
     try:
         return int(args.func(args) or 0)
+    except ValueError as exc:
+        # 入参校验失败（如人数 <= 0）：给一行提示 + 退出码 2，不抛堆栈
+        print(f"参数错误：{exc}", file=sys.stderr)
+        return 2
     except McpError as exc:
         print(f"MCP 调用失败：{exc}", file=sys.stderr)
         return 1

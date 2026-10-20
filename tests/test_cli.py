@@ -94,6 +94,16 @@ def run(argv, client=None):
 
 
 class ParserTest(unittest.TestCase):
+    def test_version_subcommand(self):
+        code, out, _ = run(["version"])
+        self.assertEqual(code, 0)
+        self.assertIn(cli.__version__, out)
+
+    def test_version_flag(self):
+        code, out, _ = run(["--version"])
+        self.assertEqual(code, 0)
+        self.assertIn(cli.__version__, out)
+
     def test_plan_requires_core_arguments(self):
         with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             cli.make_parser().parse_args(["plan", "--keyword", "春熙路",
@@ -143,6 +153,15 @@ class ErrorHandlingTest(unittest.TestCase):
             code = cli.main(["tools"])
         self.assertEqual(code, 1)
         self.assertIn("MCP 调用失败", err.getvalue())
+
+    def test_invalid_headcount_exits_with_code_2(self):
+        """入参校验失败应给一行提示 + 退出码 2，不抛堆栈。"""
+        code, _, err = run(["plan", "--city", "成都", "--keyword", "春熙路",
+                            "--headcount", "0", "--budget", "400"])
+        self.assertEqual(code, 2)
+        self.assertIn("参数错误", err)
+        self.assertIn("headcount", err)
+        self.assertNotIn("Traceback", err)
 
     def test_network_error_prints_friendly_message(self):
         """网络异常（代理 502 / 超时）应输出一行提示，不得抛 Python 堆栈。"""

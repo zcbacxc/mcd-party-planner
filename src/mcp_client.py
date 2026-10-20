@@ -17,7 +17,7 @@ import time
 import urllib.error
 import urllib.request
 from collections import deque
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from . import __version__
 
@@ -380,10 +380,7 @@ def _parse_tool_result(name: str, result: Dict[str, Any]) -> Any:
 # -- 归一化辅助（供业务层复用，集中处理响应字段差异） -------------------------
 LIST_KEYS: Tuple[str, ...] = ("items", "list", "data", "stores", "storeList",
                               "meals", "mealList", "records", "result", "content")
-CODE_KEYS: Tuple[str, ...] = ("storeCode", "storeId", "code", "storeNo", "storeCodeNo")
-MEAL_CODE_KEYS: Tuple[str, ...] = ("mealCode", "productCode", "code", "itemCode", "skuCode", "goodsCode")
 NAME_KEYS: Tuple[str, ...] = ("name", "storeName", "mealName", "productName", "title")
-CATEGORY_KEYS: Tuple[str, ...] = ("categoryName", "category", "categoryCode", "type", "tag", "tags")
 
 
 def as_list(payload: Any) -> List[Dict[str, Any]]:
@@ -447,12 +444,3 @@ def money_of(item: Dict[str, Any], keys: Sequence[str] = ("total", "totalAmount"
                 if value > 0:
                     return value
     return 0.0
-
-
-def iter_strings(value: Any) -> Iterable[str]:
-    if isinstance(value, str):
-        yield value
-    elif isinstance(value, (list, tuple)):
-        for item in value:
-            if isinstance(item, str):
-                yield item
