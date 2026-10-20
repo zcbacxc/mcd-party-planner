@@ -22,12 +22,21 @@ python -m unittest discover -s tests -p "test_*.py"   # 单元测试（离线，
 python tests/smoke.py                                  # 真实 MCP 端到端（需 Token）
 ```
 
+> CI 只在配置了 `MCD_MCP_TOKEN` Secret 时才执行真实冒烟；未配置时该步骤被跳过，
+> 汇总门禁会以 warning 标注「本次仅验证离线单测」——**CI 绿不等于真实链路已验证**。
+
+### 新增 MCP 工具时的两条硬约束
+
+1. 在 `src/mcp_client.py:TOOL_ARG_SPEC` 登记工具名与入参（未登记的字段不会发送到服务端）；
+2. 若该工具**有副作用**（下单 / 建址 / 取消 / 核销），必须同时登记到 `WRITE_TOOLS`，
+   否则遇 5xx 会被自动重试，可能产生重复订单。
+
 ## 目录结构
 
 ```
 mcd-party-planner/
 ├── src/
-│   ├── mcp_client.py       # MCP 调用层：鉴权、节流、429 退避、结果解析、入参白名单
+│   ├── mcp_client.py       # MCP 调用层：鉴权、节流、退避、重试分级、结果解析、入参白名单
 │   ├── party_planner.py    # 业务层：三场景编排 + 报告渲染
 │   ├── cli.py              # 命令行入口（selfcheck/tools/probe/plan/party/calendar）
 │   └── config.py           # 本地 .env 读取（Token 不回显）

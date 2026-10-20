@@ -9,6 +9,8 @@ import json
 import os
 import sys
 import unittest
+import urllib.error
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -150,6 +152,99 @@ class ClientTest(unittest.TestCase):
         params = transport.requests[0]["payload"]["params"]
         self.assertEqual(params["name"], "calculate-price")
         self.assertEqual(params["arguments"], {"storeCode": "S1", "items": []})
+
+
+class RetryPolicyTest(unittest.TestCase):
+    """写操作与读操作的重试策略必须不同：写操作遇 5xx 不得重试（防重复下单）。"""
+
+    ORDER_ARGS = {"partyType": 1, "spuId": 1779, "skuId": 2027, "storeCode": "S1"}
+
+    @staticmethod
+    def _client(transport):
+        return mc.McpClient(token="T", transport=transport, sleep_fn=lambda s: None)
+
+    def test_read_tool_retries_on_5xx(self):
+        transport = FakeTransport([
+            (500, "boom", {}),
+            (200, rpc_result({"structuredContent": {"ok": True}}), {}),
+        ])
+        out = self._client(transport).call_tool("query-meals", {"storeCode": "S1"})
+        self.assertEqual(out, {"ok": True})
+        self.assertEqual(len(transport.requests), 2, "读操作 5xx 应重试")
+
+    def test_write_tool_does_not_retry_on_5xx(self):
+        transport = FakeTransport([
+            (500, "boom", {}),
+            (200, rpc_result({"structuredContent": {"orderId": "1"}}), {}),
+        ])
+        with self.assertRaises(mc.McpError) as ctx:
+            self._client(transport).call_tool("party-order-create", self.ORDER_ARGS)
+        self.assertEqual(len(transport.requests), 1,
+                         "写操作遇 5xx 不得重发，否则服务端可能已建单导致重复订单")
+        self.assertIn("未自动重试", str(ctx.exception))
+
+    def test_write_tool_still_retries_on_429(self):
+        """429 表示请求被限流拒绝、未被受理，重试不会产生重复副作用。"""
+        transport = FakeTransport([
+            (429, "rate limited", {}),
+            (200, rpc_result({"structuredContent": {"orderId": "1"}}), {}),
+        ])
+        out = self._client(transport).call_tool("party-order-create", self.ORDER_ARGS)
+        self.assertEqual(out, {"orderId": "1"})
+        self.assertEqual(len(transport.requests), 2)
+
+    def test_explicit_idempotent_overrides_default(self):
+        transport = FakeTransport([
+            (500, "boom", {}),
+            (200, rpc_result({"structuredContent": {"ok": True}}), {}),
+        ])
+        out = self._client(transport).call_tool("party-order-create", self.ORDER_ARGS,
+                                                idempotent=True)
+        self.assertEqual(out, {"ok": True})
+        self.assertEqual(len(transport.requests), 2)
+
+    def test_write_tools_cover_all_side_effect_tools(self):
+        """防回归：新增有副作用的工具时必须登记到 WRITE_TOOLS。"""
+        for name in ("party-order-create", "create-order", "mall-create-order",
+                     "delivery-create-address", "cancel-order", "auto-bind-coupons",
+                     "draw-lottery"):
+            self.assertIn(name, mc.WRITE_TOOLS)
+        # 读工具不应被误登记
+        for name in ("query-meals", "calculate-price", "query-nearby-stores"):
+            self.assertNotIn(name, mc.WRITE_TOOLS)
+
+
+class NetworkErrorTest(unittest.TestCase):
+    """网络层异常必须归一化为 McpError，不得把 urllib 堆栈抛给用户。"""
+
+    def test_url_error_becomes_network_error(self):
+        with mock.patch("urllib.request.urlopen",
+                        side_effect=urllib.error.URLError(
+                            "Tunnel connection failed: 502 Bad Gateway")):
+            with self.assertRaises(mc.McpNetworkError) as ctx:
+                mc._http_transport("https://mcp.mcd.cn", {"jsonrpc": "2.0"}, {}, 1.0)
+        message = str(ctx.exception)
+        self.assertIn("网络不可达", message)
+        self.assertIn("502", message)
+
+    def test_timeout_becomes_network_error(self):
+        with mock.patch("urllib.request.urlopen", side_effect=TimeoutError("timed out")):
+            with self.assertRaises(mc.McpNetworkError):
+                mc._http_transport("https://mcp.mcd.cn", {"jsonrpc": "2.0"}, {}, 1.0)
+
+    def test_connection_reset_becomes_network_error(self):
+        with mock.patch("urllib.request.urlopen", side_effect=ConnectionResetError("reset")):
+            with self.assertRaises(mc.McpNetworkError):
+                mc._http_transport("https://mcp.mcd.cn", {"jsonrpc": "2.0"}, {}, 1.0)
+
+    def test_http_error_still_returns_status(self):
+        """HTTPError 是 URLError 子类，不能被网络异常分支吞掉。"""
+        error = urllib.error.HTTPError("https://mcp.mcd.cn", 429, "too many", {}, None)
+        error.read = lambda: b"rate limited"
+        with mock.patch("urllib.request.urlopen", side_effect=error):
+            status, body, _ = mc._http_transport("https://mcp.mcd.cn", {"jsonrpc": "2.0"}, {}, 1.0)
+        self.assertEqual(status, 429)
+        self.assertEqual(body, b"rate limited")
 
 
 class NormalizeTest(unittest.TestCase):

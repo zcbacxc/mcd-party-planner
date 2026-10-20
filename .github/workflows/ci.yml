@@ -62,9 +62,14 @@ jobs:
   #
   # 注意：`secrets` 上下文在 `jobs.<job_id>.if` 中不可用（仅 github/needs/vars/inputs），
   # 一旦使用会导致整份工作流校验失败（0 job、0 秒失败）。因此改为「步骤级探测 + 输出判断」。
+  #
+  # 跳过 ≠ 通过：`tokenReady` 输出会被汇总任务读取，未配置 Secret 时以 warning 明确告知
+  # 「本次 CI 只验证离线单测」，避免把绿勾误读为「真实链路已验证」。
   smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    outputs:
+      tokenReady: ${{ steps.token.outputs.ready }}
     steps:
       - uses: actions/checkout@v4
 
@@ -79,9 +84,10 @@ jobs:
         run: |
           if [ -n "$MCD_MCP_TOKEN" ]; then
             echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::已配置 MCD_MCP_TOKEN，将执行真实 MCP 冒烟"
           else
             echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::未配置 MCD_MCP_TOKEN，跳过真实 MCP 冒烟"
+            echo "::warning::未配置 MCD_MCP_TOKEN Secret，本次 CI 不验证真实 MCP 链路"
           fi
 
       - name: Run MCP smoke test
@@ -92,16 +98,32 @@ jobs:
 
   # 汇总门禁：名称固定为 test，便于配置分支保护时作为必需检查项
   # （矩阵任务会生成 test-matrix (3.9) 这类名称，无法直接作为必需检查）
+  #
+  # 门禁范围：单元测试矩阵 + 真实冒烟（若已配置 Secret）。冒烟失败则门禁失败；
+  # 未配置 Secret 时冒烟被跳过，门禁通过但会在日志里明确标注覆盖缺口。
   test:
-    needs: [test-matrix]
+    needs: [test-matrix, smoke]
     runs-on: ubuntu-latest
     if: always()
     steps:
       - name: Check results
         run: |
-          if [[ "${{ needs.test-matrix.result }}" == "success" ]]; then
-            echo "Unit tests passed on all Python versions"
-          else
+          if [[ "${{ needs.test-matrix.result }}" != "success" ]]; then
             echo "Unit tests: ${{ needs.test-matrix.result }}"
             exit 1
+          fi
+          echo "Unit tests passed on all Python versions"
+
+          if [[ "${{ needs.smoke.result }}" != "success" ]]; then
+            echo "Real MCP smoke: ${{ needs.smoke.result }}"
+            exit 1
+          fi
+          echo "Real MCP smoke job finished: ${{ needs.smoke.result }}"
+
+      - name: Report real-MCP coverage
+        run: |
+          if [[ "${{ needs.smoke.outputs.tokenReady }}" == "true" ]]; then
+            echo "::notice::本次 CI 已验证真实 MCP 链路（三场景冒烟）"
+          else
+            echo "::warning::真实 MCP 冒烟未执行：仓库未配置 MCD_MCP_TOKEN Secret，本次 CI 仅验证离线单测。如需覆盖真实链路，请在 Settings → Secrets and variables → Actions 添加 MCD_MCP_TOKEN。"
           fi

@@ -86,8 +86,31 @@ TOOL_ARG_SPEC: Dict[str, Tuple[str, ...]] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# 非幂等（写）工具：这些调用会在服务端产生副作用（下单 / 建址 / 核销）。
+#
+# 重试策略差异（重要）：
+# - 读工具：429 与 5xx 均可安全重试（重复查询无副作用）；
+# - 写工具：**只对 429 重试**（429 表示请求被限流拒绝、未被受理），
+#   5xx 一律不重试——服务端可能已创建订单但响应失败，重发会产生重复订单。
+# ---------------------------------------------------------------------------
+WRITE_TOOLS = frozenset({
+    "party-order-create",     # 主题活动下单
+    "create-order",           # 到店 / 外送下单
+    "mall-create-order",      # 麦麦商城下单
+    "delivery-create-address",  # 新建配送地址
+    "cancel-order",           # 取消订单
+    "auto-bind-coupons",      # 自动绑券
+    "draw-lottery",           # 抽奖（消耗机会）
+})
+
+
 class McpError(RuntimeError):
     """MCP 调用失败的基类。"""
+
+
+class McpNetworkError(McpError):
+    """网络层失败：DNS、连接重置、超时、代理故障等（请求可能未到达服务端）。"""
 
 
 class McpAuthError(McpError):
@@ -143,14 +166,21 @@ def build_arguments(tool: str, values: Optional[Dict[str, Any]] = None) -> Dict[
 
 def _http_transport(endpoint: str, payload: Dict[str, Any], headers: Dict[str, str],
                     timeout: float) -> Tuple[int, bytes, Dict[str, str]]:
-    """默认传输实现：一次 JSON-RPC over HTTP POST。"""
+    """默认传输实现：一次 JSON-RPC over HTTP POST。
+
+    网络层异常统一归一化为 `McpNetworkError`，避免调用方看到裸的 urllib 堆栈
+    （常见场景：企业代理返回 502、DNS 失败、连接重置、请求超时）。
+    """
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(endpoint, data=data, headers=headers, method="POST")
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return response.status, response.read(), dict(response.headers.items())
-    except urllib.error.HTTPError as exc:  # 4xx / 5xx
+    except urllib.error.HTTPError as exc:  # 4xx / 5xx（HTTPError 是 URLError 的子类，必须在前）
         return exc.code, exc.read(), dict(exc.headers.items())
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        reason = getattr(exc, "reason", exc)
+        raise McpNetworkError(f"网络不可达：{reason}") from exc
 
 
 class McpClient:
@@ -196,8 +226,13 @@ class McpClient:
         self._request_id += 1
         return self._request_id
 
-    def _send(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """发送一次 JSON-RPC 请求，处理 401/429，返回 result（或 {}）。"""
+    def _send(self, payload: Dict[str, Any],
+              retry_on_server_error: bool = True) -> Dict[str, Any]:
+        """发送一次 JSON-RPC 请求，处理 401/429/5xx，返回 result（或 {}）。
+
+        `retry_on_server_error=False` 用于非幂等写操作：429 仍重试（请求被拒绝、
+        未被受理），但 5xx 立即失败，避免重复下单。
+        """
         last_body = ""
         for attempt in range(self.max_retries + 1):
             self.limiter.acquire(self._sleep)
@@ -217,9 +252,15 @@ class McpClient:
                     raise McpRateLimitError("429：重试后仍触发限流（600 次/分钟）")
                 self._sleep(0.5 * (2 ** attempt))
                 continue
-            if status >= 500 and attempt < self.max_retries:
-                self._sleep(0.5 * (2 ** attempt))
-                continue
+            if status >= 500:
+                if not retry_on_server_error:
+                    raise McpError(
+                        f"HTTP {status}：服务端错误。该操作会写入数据，未自动重试；"
+                        "请求可能已被受理，请先到麦当劳官方渠道核对，再决定是否重试"
+                    )
+                if attempt < self.max_retries:
+                    self._sleep(0.5 * (2 ** attempt))
+                    continue
             if status >= 400:
                 raise McpError(f"HTTP {status}：{body[:300]}")
 
@@ -234,13 +275,13 @@ class McpClient:
         raise McpError(f"请求失败：{last_body[:300]}")
 
     def _rpc(self, method: str, params: Optional[Dict[str, Any]] = None,
-             notification: bool = False) -> Dict[str, Any]:
+             notification: bool = False, retry_on_server_error: bool = True) -> Dict[str, Any]:
         payload: Dict[str, Any] = {"jsonrpc": "2.0", "method": method}
         if not notification:
             payload["id"] = self._next_id()
         if params is not None:
             payload["params"] = params
-        return self._send(payload)
+        return self._send(payload, retry_on_server_error=retry_on_server_error)
 
     def initialize(self) -> bool:
         """执行 MCP initialize 握手并发送 initialized 通知。"""
@@ -258,12 +299,20 @@ class McpClient:
         result = self._rpc("tools/list")
         return list(result.get("tools") or [])
 
-    def call_tool(self, name: str, arguments: Optional[Dict[str, Any]] = None) -> Any:
-        """调用单个 Tool，返回已解析的结果（dict / list / str）。"""
+    def call_tool(self, name: str, arguments: Optional[Dict[str, Any]] = None,
+                  idempotent: Optional[bool] = None) -> Any:
+        """调用单个 Tool，返回已解析的结果（dict / list / str）。
+
+        重试策略按工具是否幂等自动区分：`WRITE_TOOLS` 中的工具（下单 / 建址 /
+        核销等）遇 5xx 不重试，避免重复产生副作用；显式传 `idempotent` 可覆盖。
+        """
         if not self.initialized and self._transport is _http_transport:
             self.initialize()
+        if idempotent is None:
+            idempotent = name not in WRITE_TOOLS
         args = build_arguments(name, arguments)
-        result = self._rpc("tools/call", {"name": name, "arguments": args})
+        result = self._rpc("tools/call", {"name": name, "arguments": args},
+                           retry_on_server_error=idempotent)
         return _parse_tool_result(name, result)
 
     def probe(self) -> Dict[str, Any]:

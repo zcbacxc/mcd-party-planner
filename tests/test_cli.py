@@ -14,6 +14,7 @@ import json
 import os
 import sys
 import unittest
+import urllib.error
 from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
@@ -55,7 +56,7 @@ class StubClient:
         self.dispatch = dispatch
         self.calls = []
 
-    def call_tool(self, name, arguments=None):
+    def call_tool(self, name, arguments=None, **kwargs):
         self.calls.append(name)
         return self.dispatch(name, arguments or {})
 
@@ -142,6 +143,22 @@ class ErrorHandlingTest(unittest.TestCase):
             code = cli.main(["tools"])
         self.assertEqual(code, 1)
         self.assertIn("MCP 调用失败", err.getvalue())
+
+    def test_network_error_prints_friendly_message(self):
+        """网络异常（代理 502 / 超时）应输出一行提示，不得抛 Python 堆栈。"""
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(cli.config, "load_local_env", return_value={}), \
+                mock.patch.dict(os.environ, {"MCD_MCP_TOKEN": "unit-test-token"}, clear=False), \
+                mock.patch("urllib.request.urlopen",
+                           side_effect=urllib.error.URLError(
+                               "Tunnel connection failed: 502 Bad Gateway")), \
+                redirect_stdout(out), redirect_stderr(err):
+            code = cli.main(["tools"])
+        stderr = err.getvalue()
+        self.assertEqual(code, 1)
+        self.assertIn("MCP 调用失败", stderr)
+        self.assertIn("网络不可达", stderr)
+        self.assertNotIn("Traceback", stderr)
 
 
 class OutputContractTest(unittest.TestCase):

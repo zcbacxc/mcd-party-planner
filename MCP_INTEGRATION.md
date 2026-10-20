@@ -96,6 +96,12 @@ query-nearby-stores(city, keyword) ┘        │
 
 - **节流**：滑动窗口节流器，默认 300 次 / 分钟（官方上限 600 的 50%）；
 - **退避**：429 按 0.5s → 1s → 2s 指数退避重试最多 3 次；5xx 同样退避；
+- **重试分级**：读工具（查询 / 计价）遇 5xx 可安全重试；**写工具**（`party-order-create`、
+  `create-order`、`mall-create-order`、`delivery-create-address`、`cancel-order` 等，
+  登记于 `src/mcp_client.py:WRITE_TOOLS`）**只对 429 重试**，5xx 立即失败并提示
+  「请求可能已被受理，请先到官方渠道核对」——避免重复下单等副作用；
+- **网络异常**：代理 502、DNS 失败、连接重置、超时统一归一化为 `McpNetworkError`，
+  CLI 只输出一行 `MCP 调用失败：网络不可达：…`，不向用户抛 Python 堆栈；
 - **鉴权失败**：401 立即抛出明确错误，提示 Token 无效或过期；
 - **结果解析**：优先 `structuredContent`，其次解析 `content[].text`，兼容 SSE 与纯 JSON；
 - **入参收敛**：所有工具入参由 `src/mcp_client.py:TOOL_ARG_SPEC` 统一声明并过滤，

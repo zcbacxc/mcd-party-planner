@@ -197,9 +197,14 @@ mcd-party-planner/
 ## 六、运行测试
 
 ```bash
-python -m unittest discover -s tests -p "test_*.py"   # 单元测试 55 项（无需 Token）
+python -m unittest discover -s tests -p "test_*.py"   # 单元测试 67 项（无需 Token）
 python tests/smoke.py                                  # 端到端冒烟（需真实 Token）
 ```
+
+> **CI 覆盖范围（请勿误读绿勾）**：GitHub Actions 在 Python 3.9–3.13 上执行上述**离线单元测试**；
+> 真实 MCP 冒烟需要仓库配置 `MCD_MCP_TOKEN` Secret，未配置时该步骤会被跳过，
+> 汇总门禁会以 warning 标注「本次仅验证离线单测」。
+> 因此「CI 绿」= 单元测试通过，**不等于**真实链路已验证；后者以本地 `tests/smoke.py` 为准。
 
 开发设置、代码风格与提交约定见 [`docs/CONTRIBUTING.md`](./docs/CONTRIBUTING.md)；
 版本变更记录见 [`CHANGELOG.md`](./CHANGELOG.md)。

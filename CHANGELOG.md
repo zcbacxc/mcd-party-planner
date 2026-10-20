@@ -5,6 +5,29 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **写操作可能重复下单**：调用层对 429/5xx 一律重试，且不区分工具是否幂等；
+  `party-order-create` 在 `--confirm` 下若遇服务端 5xx（订单可能已创建），重发会产生重复订单。
+  新增 `WRITE_TOOLS`（下单 / 建址 / 取消 / 绑券 / 抽奖）与 `call_tool(idempotent=...)`：
+  写操作**只对 429 重试**（请求被限流拒绝、未被受理），5xx 立即失败并提示「请求可能已被受理，
+  请先到官方渠道核对」。读操作的重试行为不变。
+- **网络异常裸抛 Python 堆栈**：`_http_transport` 原先只捕获 `HTTPError`，企业代理 502、
+  DNS 失败、连接重置、超时都会把 `urllib.error.URLError` 直接抛给用户。现统一归一化为
+  新增的 `McpNetworkError`，CLI 输出 `MCP 调用失败：网络不可达：…`（退出码 1，无堆栈）。
+- **CI 绿勾含义不明**：未配置 `MCD_MCP_TOKEN` Secret 时真实 MCP 冒烟一直被跳过，但汇总门禁
+  仍是绿色。现 `smoke` 任务输出 `tokenReady`，汇总门禁据此输出 notice/warning：
+  已配置则声明「已验证真实链路」，未配置则明确标注「本次仅验证离线单测」；
+  冒烟失败时门禁失败。
+
+### Added
+
+- **Tests**：12 项用例。写操作遇 5xx 不重试（含显式 `idempotent` 覆盖、`WRITE_TOOLS` 防回归）、
+  写操作遇 429 仍重试、读操作 5xx 仍重试、`URLError` / 超时 / 连接重置归一化、
+  `HTTPError` 不被网络分支吞掉、CLI 网络异常输出无堆栈、`--confirm` 显式声明非幂等、
+  `dry_run` 不调用下单工具。测试总数 55 → **67 项**。
+- `.gitignore` 增加 `.workbuddy-ai/`（AI 助手本地工作区，不入公开仓库）。
+
 ## [1.0.1] - 2026-10-20
 
 ### Fixed

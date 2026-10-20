@@ -40,8 +40,9 @@ class StubClient:
         self.dispatch = dispatch
         self.calls = []
 
-    def call_tool(self, name, arguments=None):
+    def call_tool(self, name, arguments=None, **kwargs):
         self.calls.append((name, dict(arguments or {})))
+        self.last_kwargs = kwargs
         return self.dispatch(name, arguments or {})
 
 
@@ -196,6 +197,15 @@ class PartyBookingTest(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["order"], {"success": True, "data": {"orderNo": "ORDER-1"}})
         self.assertIn("party-order-create", [n for n, _ in self.client.calls])
+
+    def test_confirm_marks_order_as_non_idempotent(self):
+        """下单调用必须显式声明非幂等，避免 5xx 时被调用层重试导致重复订单。"""
+        pp.plan_party_booking(self.client, "成都市", count=6, dry_run=False)
+        self.assertIs(self.client.last_kwargs.get("idempotent"), False)
+
+    def test_dry_run_does_not_call_order_tool(self):
+        pp.plan_party_booking(self.client, "成都市", count=6)
+        self.assertNotIn("party-order-create", [n for n, _ in self.client.calls])
 
     def test_unknown_city_returns_failure(self):
         result = pp.plan_party_booking(self.client, "火星市")

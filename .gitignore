@@ -17,6 +17,9 @@ docs/mcp-schema.json
 # 本地专用文档目录：含参赛策略与个人信息，不对外发布
 docs-nocommit/
 
+# AI 助手工作区（会话记忆 / 项目内技能缓存），本地专属，不进公开仓库
+.workbuddy-ai/
+
 # AI 工具上下文（本地专属，不进公开仓库）
 .claude/
 CLAUDE.md

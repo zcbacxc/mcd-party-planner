@@ -331,8 +331,8 @@ def plan_party_booking(client: Any, city_name: str, spu_id: Optional[Any] = None
     """串联主题活动预约链路。dry_run=True（默认）只产出可下单载荷，不创建订单。"""
     trace: List[Dict[str, Any]] = []
 
-    def step(tool: str, arguments: Dict[str, Any]) -> Any:
-        payload = client.call_tool(tool, arguments)
+    def step(tool: str, arguments: Dict[str, Any], **kwargs: Any) -> Any:
+        payload = client.call_tool(tool, arguments, **kwargs)
         trace.append({"tool": tool, "arguments": arguments, "ok": _is_ok(payload),
                       "message": payload.get("message") if isinstance(payload, dict) else None})
         return payload
@@ -398,7 +398,8 @@ def plan_party_booking(client: Any, city_name: str, spu_id: Optional[Any] = None
         result["note"] = "dry_run=True：未真实下单，仅输出可下单载荷"
         return result
 
-    result["order"] = step("party-order-create", order_payload)
+    # 显式声明非幂等：遇 5xx 不得自动重试，避免重复下单（详见 mcp_client.WRITE_TOOLS）
+    result["order"] = step("party-order-create", order_payload, idempotent=False)
     result["note"] = "已提交真实下单请求"
     return result
 
