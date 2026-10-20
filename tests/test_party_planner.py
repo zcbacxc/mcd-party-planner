@@ -308,5 +308,65 @@ class RoleMappingTest(unittest.TestCase):
         self.assertEqual(missing, ["甜品"])
 
 
+class PartySelectionFallbackTest(unittest.TestCase):
+    """首店无日期、首日余位不足时继续探测后续门店与日期（真实服务端常见情形）。"""
+
+    def test_falls_back_to_second_store(self):
+        two_stores = {"success": True, "data": [
+            {"code": "S-EMPTY", "name": "空档餐厅"},
+            {"code": "3450261", "name": "大魔方餐厅"}]}
+
+        def dispatch(name, arguments):
+            if name == "query-party-store":
+                return two_stores
+            if name == "query-party-store-date":
+                if arguments["storeCode"] == "S-EMPTY":
+                    return {"success": True, "data": []}
+                return PDATE
+            return party_dispatch(name, arguments)
+
+        client = StubClient(dispatch)
+        result = pp.plan_party_booking(client, "成都市", count=6)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["storeCode"], "3450261")
+
+    def test_skips_date_with_insufficient_seats(self):
+        dates = {"success": True, "data": [{"date": "2026-10-16"}, {"date": "2026-10-17"}]}
+        crowded = {"success": True, "data": [
+            {"id": 1, "leftNum": 2, "price": 5000, "timeStart": "10:00", "timeEnd": "11:30"}]}
+
+        def dispatch(name, arguments):
+            if name == "query-party-store-date":
+                return dates
+            if name == "query-party-store-session":
+                return crowded if arguments["dateStr"] == "2026-10-16" else PSESSION
+            return party_dispatch(name, arguments)
+
+        result = pp.plan_party_booking(StubClient(dispatch), "成都市", count=6)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["date"], "2026-10-17")
+        self.assertNotIn("warning", result)
+
+    def test_insufficient_seats_yields_warning(self):
+        crowded = {"success": True, "data": [
+            {"id": 9, "leftNum": 2, "price": 5000, "timeStart": "10:00", "timeEnd": "11:30"}]}
+
+        def dispatch(name, arguments):
+            if name == "query-party-store-session":
+                return crowded
+            return party_dispatch(name, arguments)
+
+        result = pp.plan_party_booking(StubClient(dispatch), "成都市", count=8)
+        self.assertTrue(result["ok"])
+        self.assertIn("余位", result["warning"])
+        self.assertIn("！提示：", pp.render_party_report(result))
+
+    def test_preferred_date_unavailable_fails_clearly(self):
+        result = pp.plan_party_booking(StubClient(party_dispatch), "成都市",
+                                       date="2026-12-31", count=6)
+        self.assertFalse(result["ok"])
+        self.assertIn("2026-12-31", result["reason"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -132,6 +132,14 @@ class ClientTest(unittest.TestCase):
         with self.assertRaises(mc.McpAuthError):
             client.initialize()
 
+    def test_initialize_reports_package_version(self):
+        """clientInfo.version 必须取自包版本，避免与 __version__ 双份维护。"""
+        transport = FakeTransport([(200, rpc_result({"ok": True}), {})])
+        client = mc.McpClient(token="T", transport=transport, sleep_fn=lambda s: None)
+        client.initialize()
+        init_payload = transport.requests[0]["payload"]
+        self.assertEqual(init_payload["params"]["clientInfo"]["version"], mc.__version__)
+
     def test_call_tool_sends_tool_call(self):
         transport = FakeTransport([
             (200, rpc_result({"structuredContent": {"total": 88.0}}), {}),

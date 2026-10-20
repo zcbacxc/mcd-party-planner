@@ -45,10 +45,12 @@ jobs:
           python -m src.cli selfcheck
 
   # 真实 MCP 端到端冒烟：需要 Token，未配置该 Secret 时自动跳过（脚本以 0 退出）
+  #
+  # 注意：`secrets` 上下文在 `jobs.<job_id>.if` 中不可用（仅 github/needs/vars/inputs），
+  # 一旦使用会导致整份工作流校验失败（0 job、0 秒失败）。因此改为「步骤级探测 + 输出判断」。
   smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    if: ${{ secrets.MCD_MCP_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -56,7 +58,20 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Check MCD_MCP_TOKEN availability
+        id: token
+        env:
+          MCD_MCP_TOKEN: ${{ secrets.MCD_MCP_TOKEN }}
+        run: |
+          if [ -n "$MCD_MCP_TOKEN" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::未配置 MCD_MCP_TOKEN，跳过真实 MCP 冒烟"
+          fi
+
       - name: Run MCP smoke test
+        if: steps.token.outputs.ready == 'true'
         env:
           MCD_MCP_TOKEN: ${{ secrets.MCD_MCP_TOKEN }}
         run: python tests/smoke.py --city 成都 --keyword 春熙路 --headcount 8 --budget 400

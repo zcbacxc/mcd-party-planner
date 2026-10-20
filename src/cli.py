@@ -73,7 +73,7 @@ def cmd_probe(args: argparse.Namespace) -> int:
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(snapshot, handle, ensure_ascii=False, indent=2)
     print(f"已导出 {snapshot['toolCount']} 个工具定义 → {path}")
-    print("请据此校准 src/mcp_client.py 的 TOOL_ARG_SPEC 与 ITEM_PAYLOAD_CODE_KEY。")
+    print("请据此校准 src/mcp_client.py 的 TOOL_ARG_SPEC 与响应解析辅助函数。")
     return 0
 
 

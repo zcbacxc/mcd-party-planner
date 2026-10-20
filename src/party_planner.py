@@ -290,6 +290,41 @@ def _sku_id_of(client: Any, spu_id: Any) -> Optional[Any]:
     return None
 
 
+def _select_session(step: Any, spu_id: Any, stores: Sequence[Dict[str, Any]],
+                    preferred_date: Optional[str], count: int,
+                    max_stores: int = 3, max_dates: int = 3
+                    ) -> Optional[Tuple[Dict[str, Any], str, str, Dict[str, Any]]]:
+    """在「门店 × 日期 × 场次」中挑选可容纳人数的最近场次。
+
+    真实服务端常见「首店当日无场次」或「首场余位不足」，逐级探测可显著降低
+    整条链路无输出的概率。返回 (门店, 门店编码, 日期, 场次)；全部不可用时返回 None。
+    """
+    fallback: Optional[Tuple[Dict[str, Any], str, str, Dict[str, Any]]] = None
+    for store in stores[:max_stores]:
+        store_code = store_code_of(store)
+        if not store_code:
+            continue
+        dates = as_list(_data_of(step("query-party-store-date",
+                                      {"spuId": spu_id, "storeCode": store_code})))
+        date_list = [str(first_value(d, ("date", "dateStr"), "") or "") for d in dates]
+        date_list = [d for d in date_list if d]
+        if preferred_date:
+            # 用户显式指定日期：该店无此日期则换店，绝不改到别的日期
+            date_list = [d for d in date_list if d == preferred_date]
+        for date_str in date_list[:max_dates]:
+            sessions = as_list(_data_of(step("query-party-store-session", {
+                "spuId": spu_id, "storeCode": store_code, "dateStr": date_str,
+            })))
+            if not sessions:
+                continue
+            fit = next((s for s in sessions if (s.get("leftNum") or 0) >= count), None)
+            if fit:
+                return store, store_code, date_str, fit
+            if fallback is None:
+                fallback = (store, store_code, date_str, sessions[0])
+    return fallback
+
+
 def plan_party_booking(client: Any, city_name: str, spu_id: Optional[Any] = None,
                        date: Optional[str] = None, count: int = 5,
                        party_type: int = 1, dry_run: bool = True) -> Dict[str, Any]:
@@ -321,23 +356,14 @@ def plan_party_booking(client: Any, city_name: str, spu_id: Optional[Any] = None
     })))
     if not stores:
         return {"ok": False, "reason": "该城市暂无可参与主题活动的门店", "trace": trace}
-    store = stores[0]
-    store_code = store_code_of(store)
 
-    dates = as_list(_data_of(step("query-party-store-date",
-                                  {"spuId": spu_id, "storeCode": store_code})))
-    picked_date = date or (str(first_value(dates[0], ("date", "dateStr"), "") or "")
-                           if dates else "")
-    if not picked_date:
-        return {"ok": False, "reason": "该门店暂无可预约日期", "trace": trace}
-
-    sessions = as_list(_data_of(step("query-party-store-session", {
-        "spuId": spu_id, "storeCode": store_code, "dateStr": picked_date,
-    })))
-    session = next((s for s in sessions if (s.get("leftNum") or 0) >= count), None) \
-        or (sessions[0] if sessions else None)
-    if not session:
-        return {"ok": False, "reason": "该日期暂无可预约场次", "trace": trace}
+    # 逐店 × 逐日期探测：首店/首日无可用场次时继续尝试，避免单点失败中断整条链路
+    selection = _select_session(step, spu_id, stores, date, count)
+    if not selection:
+        reason = (f"门店在 {date} 暂无可预约场次" if date
+                  else "附近门店暂无可预约的日期或场次")
+        return {"ok": False, "reason": reason, "trace": trace}
+    store, store_code, picked_date, session = selection
 
     order_payload = {
         "partyType": party_type,
@@ -364,6 +390,9 @@ def plan_party_booking(client: Any, city_name: str, spu_id: Optional[Any] = None
                     "partyMin": session.get("partyMin"), "partyMax": session.get("partyMax")},
         "orderPayload": order_payload, "trace": trace, "dryRun": dry_run,
     }
+    left_num = session.get("leftNum") or 0
+    if left_num < count:
+        result["warning"] = f"所选场次余位 {left_num} 少于人数 {count}，建议换场次或拆单"
     if dry_run:
         result["order"] = None
         result["note"] = "dry_run=True：未真实下单，仅输出可下单载荷"
@@ -386,6 +415,7 @@ def render_party_report(result: Dict[str, Any]) -> str:
         f"余位：{session.get('leftNum')}　价格：¥{session.get('price')}",
         f"调用链路：{' → '.join(t['tool'] for t in result['trace'])}",
         f"下单载荷：{result.get('orderPayload')}",
+        f"！提示：{result['warning']}" if result.get("warning") else "",
         result.get("note", ""),
     ]
     return "\n".join(line for line in lines if line)

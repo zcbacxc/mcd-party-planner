@@ -19,6 +19,8 @@ import urllib.request
 from collections import deque
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from . import __version__
+
 DEFAULT_ENDPOINT = "https://mcp.mcd.cn"
 
 # 官方硬限：每个 Token 每分钟最多 600 次请求（超出返回 429）。
@@ -245,7 +247,7 @@ class McpClient:
         result = self._rpc("initialize", {
             "protocolVersion": "2025-06-18",
             "capabilities": {},
-            "clientInfo": {"name": "mcd-party-planner", "version": "1.0.0"},
+            "clientInfo": {"name": "mcd-party-planner", "version": __version__},
         })
         self._rpc("notifications/initialized", notification=True)
         self.initialized = True
