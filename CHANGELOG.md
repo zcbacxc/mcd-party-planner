@@ -3,6 +3,36 @@
 本项目变更记录遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 分类：
 `Added` / `Changed` / `Deprecated` / `Removed` / `Fixed` / `Security`。
 
+## [Unreleased]
+
+## [1.1.1] - 2026-10-20
+
+### Changed
+
+- **活动日历报告改为分组呈现**：原先逐日输出（真实服务端一次返回 13 天），同一句建议重复 11 次，
+  重点被淹没。现按「今日 / 未来 / 往期」分组，**每组只输出一次建议**；未来活动默认只展开最近
+  `CALENDAR_FUTURE_PREVIEW`（5）天，其余折叠为「…另有 N 天未来活动已省略」。
+  输出行数由 40+ 行降至约 20 行，信息量不变。
+
+### Added
+
+- 新增 `version` 子命令与全局 `--version` 参数（均读取 `src/__init__.py:__version__`，保持版本单一来源）。
+- **Tests**：5 项用例。`version` 子命令、`--version` 参数、`budget=0` 语义、非法入参退出码、
+  日历分组与建议折叠。测试总数 67 → **72 项**。
+
+### Fixed
+
+- **`budget=0` 被当作「不限预算」**：`plan_group_meal` 的预算判定写作 `if budget else True`，
+  零预算时所有方案都被标为「预算内」。改为 `budget is not None`，零预算即全部超预算，
+  推荐仍给出最便宜方案作参考。
+- **非法入参抛 Python 堆栈**：`--headcount 0`、`--budget -1` 等触发 `ValueError` 时直接打堆栈。
+  现由 CLI 统一捕获，输出 `参数错误：…` 并以退出码 2 结束（与「Token 缺失」一致）。
+
+### Removed
+
+- 清理零引用符号：`iter_strings`、`CODE_KEYS`、`MEAL_CODE_KEYS`、`CATEGORY_KEYS`
+  （定义后从未被调用，易被误读为「未完成的功能」）。
+
 ## [1.1.0] - 2026-10-20
 
 ### Fixed
@@ -74,7 +104,8 @@
 - 活动标题改取 `articleDto.title`（`activityTitle` 实际为空）。
 - 城市未命中时不再静默取首个城市，避免把派对预约到异地。
 
-[Unreleased]: https://github.com/zcbacxc/mcd-party-planner/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/zcbacxc/mcd-party-planner/compare/v1.1.1...HEAD
+[1.1.1]: https://github.com/zcbacxc/mcd-party-planner/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/zcbacxc/mcd-party-planner/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/zcbacxc/mcd-party-planner/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/zcbacxc/mcd-party-planner/releases/tag/v1.0.0
