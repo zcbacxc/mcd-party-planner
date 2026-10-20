@@ -41,8 +41,10 @@ jobs:
           import re
           with open('CHANGELOG.md', encoding='utf-8') as f:
               content = f.read()
-          # 预发布 tag 去掉 -rcN 后缀后查 CHANGELOG
-          ver = re.sub(r'-rc\d+$', '', '${TAG_VERSION}')
+          # CHANGELOG 小节标题不带 v 前缀（## [1.2.0]），tag 带（v1.2.0），先剥离；
+          # 预发布 tag 再去掉 -rcN 后缀
+          ver = re.sub(r'^v', '', '${TAG_VERSION}')
+          ver = re.sub(r'-rc\d+$', '', ver)
           pattern = r'## \[' + re.escape(ver) + r'\](.*?)(?=\n## \[|\Z)'
           m = re.search(pattern, content, re.DOTALL)
           if m:
