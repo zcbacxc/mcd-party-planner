@@ -1,0 +1,67 @@
+name: Release
+
+# tag 推送触发：从 CHANGELOG.md 提取对应版本小节，自动创建 GitHub Release。
+# 本地化自 movie-narrator 的 publish.yml——保留「tag → 提取变更记录 → 创建 Release」一环，
+# 去掉 PyPI / TestPyPI 发布链（本项目不打包、无发布产物）。
+#
+# 约定（与 .claude/rules/release.md 一致）：
+# - 正式版 tag `vX.Y.Z`；预发布 tag `vX.Y.Z-rcN`（创建 prerelease）；
+# - 自动化创建的 Release 标题为裸 tag，正文为 CHANGELOG 对应小节原文；
+#   推送 tag 后按约定人工打磨标题（`gh release edit`），正文不得编造 CHANGELOG 之外的内容；
+# - 每个 tag 只允许存在一个非草稿 Release。
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write   # 创建 GitHub Release 所需
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine release type
+        id: meta
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          if [[ "$TAG" == *"-rc"* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Generate release notes from CHANGELOG
+        id: notes
+        run: |
+          TAG_VERSION="${{ steps.meta.outputs.tag }}"
+          python3 -c "
+          import re
+          with open('CHANGELOG.md', encoding='utf-8') as f:
+              content = f.read()
+          # 预发布 tag 去掉 -rcN 后缀后查 CHANGELOG
+          ver = re.sub(r'-rc\d+$', '', '${TAG_VERSION}')
+          pattern = r'## \[' + re.escape(ver) + r'\](.*?)(?=\n## \[|\Z)'
+          m = re.search(pattern, content, re.DOTALL)
+          if m:
+              lines = m.group(1).strip().split('\n', 1)
+              body = lines[1] if len(lines) > 1 else lines[0]
+              with open('/tmp/release_notes.md', 'w', encoding='utf-8') as out:
+                  out.write(body.strip() + '\n')
+          else:
+              with open('/tmp/release_notes.md', 'w', encoding='utf-8') as out:
+                  out.write('Release ${TAG_VERSION}\n')
+          "
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body_path: /tmp/release_notes.md
+          draft: false
+          prerelease: ${{ steps.meta.outputs.prerelease }}
