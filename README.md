@@ -6,10 +6,49 @@
 >
 > 参赛作品 —— 麦当劳程序员节创意开发大赛（2026 · 1024 程序员节）。
 
+[![CI](https://github.com/zcbacxc/mcd-party-planner/actions/workflows/ci.yml/badge.svg)](https://github.com/zcbacxc/mcd-party-planner/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/zcbacxc/mcd-party-planner)](https://github.com/zcbacxc/mcd-party-planner/releases)
 [![Python](https://img.shields.io/badge/Python-3.9%2B-blue)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green)](./LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-mcd--mcp-orange)](https://github.com/M-China/mcd-mcp-server)
 [![Deps](https://img.shields.io/badge/dependencies-stdlib%20only-brightgreen)](#5-环境要求)
+
+---
+
+## 30 秒看懂
+
+**一句话**：你说「成都春熙路，8 个人，预算 400」，它去麦当劳 MCP 查附近营业门店、拉真实菜单、用官方计价接口算钱，给你几套含人均的可比对方案——顺手把派对场次和附近活动也查了。
+
+```bash
+cp .env.example .env      # 填 MCD_MCP_TOKEN（open.mcd.cn 免费申请）
+python -m src.cli plan --city 成都 --keyword 春熙路 --headcount 8 --budget 400
+```
+
+```text
+【团餐方案】城市：成都　关键词：春熙路　人数：8　预算：¥400.0
+已扫描门店：2　可选方案：6　预算内方案：1
+1. [经济型] 麦当劳成都锦江区联升巷(京都大厦)餐厅　合计 ¥342.4　人均 ¥42.8　预算内
+推荐：[经济型] 麦当劳成都锦江区联升巷(京都大厦)餐厅，合计 ¥342.4，人均 ¥42.8
+```
+
+> 上为 **2026-10-20 真实调用**输出（有删节）。服务端菜单与价格按日轮换，复跑结果会不同——这属正常，不是模拟数据。
+
+三个场景如何串联：
+
+```mermaid
+flowchart LR
+    A["用户输入<br/>城市 · 关键词 · 人数 · 预算"] --> B["团餐方案生成"]
+    A --> C["主题活动预约"]
+    A --> D["活动日历建议"]
+    B --> B1["query-nearby-stores<br/>query-meals<br/>query-meal-detail<br/>calculate-price"]
+    C --> C1["mall-points-products<br/>query-party-city<br/>query-party-store<br/>query-party-store-date<br/>query-party-store-session<br/>party-order-create（dry_run）"]
+    D --> D1["campaign-calendar<br/>query-nearby-stores<br/>query-meal-assistance"]
+```
+
+- **不编价格**：金额一律来自 `calculate-price`，遇限购等业务限制就跳过并提示；
+- **不误下单**：主题预约默认 `dry_run`，只给可下单载荷，加 `--confirm` 才真实下单；
+- **不重复下单**：写操作（下单 / 建址 / 取消）遇 5xx 不自动重试，只对 429 重试；
+- **零依赖**：纯 Python 标准库，Python 3.9+，不需要 `pip install`。
 
 ---
 
@@ -79,9 +118,10 @@ MCD_MCP_ENDPOINT: https://mcp.mcd.cn
 
 ## 三、使用示例
 
-> 以下输出均为**真实调用麦当劳 MCP** 的结果（成都 · 春熙路，2026-10-16 实测）。
+> 以下输出均为**真实调用麦当劳 MCP** 的结果（成都 · 春熙路）。
+> **服务端商品与价格按日轮换**，因此每条示例都标注了实测日期——复跑结果与示例不同属正常现象，不是模拟数据。
 
-### 示例 1：8 人聚餐，预算 400 元
+### 示例 1：8 人聚餐，预算 400 元（2026-10-16 实测）
 
 ```bash
 python -m src.cli plan --city 成都 --keyword 春熙路 --headcount 8 --budget 400
@@ -108,7 +148,7 @@ python -m src.cli plan --city 成都 --keyword 春熙路 --headcount 8 --budget 
 > `--json` 输出结构化结果；`--store-limit` 控制比对门店数。
 > 注：部分餐品存在「每单限购 1 件」等业务限制，这类组合会以提示形式跳过，不编造价格。
 
-### 示例 2：预约派对 / 品鉴会（默认不下单）
+### 示例 2：预约派对 / 品鉴会（默认不下单，2026-10-16 实测）
 
 ```bash
 python -m src.cli party --city 成都市 --headcount 6
@@ -131,7 +171,7 @@ dry_run=True：未真实下单，仅输出可下单载荷
 python -m src.cli party --city 成都市 --headcount 6 --confirm
 ```
 
-### 示例 3：活动日历 × 附近门店
+### 示例 3：活动日历 × 附近门店（2026-10-16 实测）
 
 ```bash
 python -m src.cli calendar --city 成都 --keyword 春熙路
@@ -153,7 +193,7 @@ python -m src.cli calendar --city 成都 --keyword 春熙路
 · 麦当劳成都三友路得来速餐厅：支持 保鲜速达
 ```
 
-### 示例 4：校准工具入参（开发者）
+### 示例 4：校准工具入参（开发者，命令与当前版本一致）
 
 ```bash
 python -m src.cli probe    # 拉取服务端 inputSchema → docs/mcp-schema.json
