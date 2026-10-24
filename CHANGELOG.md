@@ -3,7 +3,7 @@
 本项目变更记录遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 分类：
 `Added` / `Changed` / `Deprecated` / `Removed` / `Fixed` / `Security`。
 
-## [Unreleased]
+## [1.2.0] - 2026-10-24
 
 ### Added
 
@@ -129,7 +129,8 @@
 - 活动标题改取 `articleDto.title`（`activityTitle` 实际为空）。
 - 城市未命中时不再静默取首个城市，避免把派对预约到异地。
 
-[Unreleased]: https://github.com/zcbacxc/mcd-party-planner/compare/v1.1.1...HEAD
+[Unreleased]: https://github.com/zcbacxc/mcd-party-planner/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/zcbacxc/mcd-party-planner/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/zcbacxc/mcd-party-planner/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/zcbacxc/mcd-party-planner/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/zcbacxc/mcd-party-planner/compare/v1.0.0...v1.0.1
