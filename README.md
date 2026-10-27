@@ -231,13 +231,15 @@ mcd-party-planner/
     ├── test_mcp_client.py     # 调用层单元测试
     ├── test_party_planner.py  # 业务层单元测试
     ├── test_cli.py            # 命令行契约测试（参数、退出码、输出格式）
+    ├── test_config.py         # 配置读取测试（.env 解析与覆盖规则）
+    ├── test_docs.py           # 文档契约测试（工具数、测试数、版本号）
     └── smoke.py               # 真实 MCP 端到端冒烟（Token 缺失时自动跳过）
 ```
 
 ## 六、运行测试
 
 ```bash
-python -m unittest discover -s tests -p "test_*.py"   # 单元测试 99 项（无需 Token）
+python -m unittest discover -s tests -p "test_*.py"   # 单元测试 107 项（无需 Token）
 python tests/smoke.py                                  # 端到端冒烟（需真实 Token）
 ```
 

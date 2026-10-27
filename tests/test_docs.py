@@ -3,6 +3,7 @@
 覆盖：
 - README 声明的接入工具数 == 业务层实际调用的工具数；
 - MCP_INTEGRATION 声明的服务端工具数 == `TOOL_ARG_SPEC` 登记数；
+- MCP_INTEGRATION 的「服务端总数 / 本项目接入 / 未接入」三个数字自洽（G12）；
 - README 声明的单测项数 == 实际用例数；
 - CHANGELOG 含当前版本小节。
 
@@ -47,6 +48,15 @@ def used_tool_count() -> int:
     return len(names)
 
 
+def integration_numbers():
+    """MCP_INTEGRATION §2 对照表的三个数字：服务端总数 / 本项目接入 / 未接入。"""
+    text = read_doc("MCP_INTEGRATION.md")
+    total = int(re.search(r"服务端当前共\s*(\d+)\s*个 Tool", text).group(1))
+    used = int(re.search(r"\*\*本项目接入\*\*\s*\|\s*\*\*(\d+)\*\*", text).group(1))
+    rest = int(re.search(r"\|\s*未接入\s*\|\s*(\d+)\s*\|", text).group(1))
+    return total, used, rest
+
+
 class DocContractTest(unittest.TestCase):
     def test_readme_test_count_matches_suite(self):
         declared = int(re.search(r"单元测试\s*(\d+)\s*项", read_doc("README.md")).group(1))
@@ -63,6 +73,16 @@ class DocContractTest(unittest.TestCase):
         declared = int(re.search(r"服务端当前共\s*(\d+)\s*个 Tool", text).group(1))
         self.assertEqual(declared, len(TOOL_ARG_SPEC),
                          "MCP_INTEGRATION 的服务端工具数已过期，请同步")
+
+    def test_integration_used_tool_count_matches_usage(self):
+        _, used, _ = integration_numbers()
+        self.assertEqual(used, used_tool_count(),
+                         "MCP_INTEGRATION 的「本项目接入」数已过期，请同步")
+
+    def test_integration_tool_gap_adds_up(self):
+        total, used, rest = integration_numbers()
+        self.assertEqual(total - used, rest,
+                         "对照表数字不自洽：服务端总数 - 本项目接入 应等于未接入数")
 
     def test_changelog_mentions_current_version(self):
         self.assertIn(f"## [{__version__}]", read_doc("CHANGELOG.md"),

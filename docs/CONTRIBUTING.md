@@ -42,12 +42,17 @@ mcd-party-planner/
 │   └── config.py           # 本地 .env 读取（Token 不回显）
 ├── skill/SKILL.md          # WorkBuddy Skill 定义（主交付形态）
 ├── tests/                  # unittest 单元测试 + smoke 真实端到端
-├── docs/                   # 开发文档（本文件、CHANGELOG 等）
+├── docs/                   # 开发文档：CONTRIBUTING.md（本文件）、ADR.md（架构决策记录）
+├── README.md               # 项目说明（含「30 秒看懂」与命令示例）
+├── CHANGELOG.md            # 版本变更记录（根目录，遵循 Keep a Changelog）
 ├── MCP_INTEGRATION.md      # MCP 集成说明（赛事交付物）
 ├── workbuddy.md            # WorkBuddy 开发上下文（赛事交付物）
 ├── CONTEST_DECLARATION.md  # 参赛声明（赛事规则：文件名与内容均不可改动）
 └── mcp-config.example.json # 脱敏 MCP 配置示例
 ```
+
+> `docs/mcp-schema.json` 是 `probe` 生成的 schema 快照，已 gitignore，不入库；
+> 需要时本地重新生成即可。
 
 ## 代码风格
 

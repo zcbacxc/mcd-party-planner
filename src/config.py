@@ -9,15 +9,19 @@
 from __future__ import annotations
 
 import os
-from typing import Dict, Optional
+from typing import Dict, Optional, Set
 
 ENV_FILE_CANDIDATES = (".env",)
 
 
-def load_local_env(base_dir: Optional[str] = None, override: bool = False) -> Dict[str, str]:
-    """读取本地 .env（若存在），返回已加载的键名集合（不含值）。"""
+def load_local_env(base_dir: Optional[str] = None, override: bool = False) -> Set[str]:
+    """读取本地 `.env`（若存在）写入 `os.environ`，返回本次**加载的键名集合**。
+
+    只返回值、不返回键值对：调用方拿不到 Token 明文，即使误写进日志或报告也不会泄漏。
+    已存在的环境变量默认不覆盖，`override=True` 时才覆盖。
+    """
     base_dir = base_dir or os.getcwd()
-    loaded: Dict[str, str] = {}
+    loaded: Set[str] = set()
     for filename in ENV_FILE_CANDIDATES:
         path = os.path.join(base_dir, filename)
         if not os.path.isfile(path):
@@ -34,7 +38,7 @@ def load_local_env(base_dir: Optional[str] = None, override: bool = False) -> Di
                     continue
                 if override or key not in os.environ:
                     os.environ[key] = value
-                loaded[key] = ""
+                loaded.add(key)
     return loaded
 
 
