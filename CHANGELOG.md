@@ -3,6 +3,38 @@
 本项目变更记录遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 分类：
 `Added` / `Changed` / `Deprecated` / `Removed` / `Fixed` / `Security`。
 
+## [1.3.0] - 2026-10-27
+
+### Added
+
+- **离线回放**：新增 `src/replay.py`，提供 `RecordingTransport` / `ReplayTransport`，
+  与 `_http_transport` 完全同签名，直接注入 `McpClient(transport=...)`，调用层零改动。
+  CLI 新增 `--record <path>` 与 `--replay <path>`；**回放模式不发任何请求、不需要 Token**。
+- **可分享报告**：新增 `src/report.py` 与 `--format {text,json,md,html}`。
+  HTML 为**单文件、内联样式、零外部引用**（无 `<script src>` / `<link>` / 外链图片），
+  双击即可离线打开；所有服务端文本经 `html.escape`，餐品名里出现 `<script>` 也只会显示成文字。
+- **示例快照**：`examples/` 收录三份真实调用录制（团餐 / 派对 / 日历），
+  附 `examples/README.md` 说明「录制快照，非实时数据」及重新录制方法。
+- **CI 离线回放步骤**：单元测试矩阵中显式 `env -u MCD_MCP_TOKEN` 跑一次回放 + HTML 生成，
+  并断言 HTML 不含 `https://`——防止「无 Token 可预览」这条路径悄悄腐化。
+
+### Changed
+
+- `--json` 保留为 `--format json` 的别名，既有脚本无需修改；显式 `--format` 优先。
+- `selfcheck` 新增 `--replay`：指定快照时只提示回放模式，不再要求 Token。
+- `McpClient` 新增 `_should_auto_initialize()`：自定义传输默认仍不握手（不打扰测试替身），
+  录制 / 回放传输显式声明 `auto_initialize = True` 后才会自动握手。
+- 录制快照只保留 `Mcp-Session-Id` 与 `Content-Type` 两个响应头，服务端的请求追踪标识不入仓库。
+
+### Fixed
+
+- 无 Token 时的错误提示补充「可加 `--replay` 离线查看效果」，不再只指向申请入口。
+
+### Tests
+
+- 新增 `tests/test_replay.py`（10 项）、`tests/test_report.py`（12 项）、
+  `tests/test_cli.py` 回放端到端（5 项）。测试总数 107 → **134 项**。
+
 ## [1.2.1] - 2026-10-27
 
 本版为技术债清理，**不改任何命令行为与输出格式**。
@@ -155,7 +187,8 @@
 - 活动标题改取 `articleDto.title`（`activityTitle` 实际为空）。
 - 城市未命中时不再静默取首个城市，避免把派对预约到异地。
 
-[Unreleased]: https://github.com/zcbacxc/mcd-party-planner/compare/v1.2.1...HEAD
+[Unreleased]: https://github.com/zcbacxc/mcd-party-planner/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/zcbacxc/mcd-party-planner/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/zcbacxc/mcd-party-planner/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/zcbacxc/mcd-party-planner/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/zcbacxc/mcd-party-planner/compare/v1.1.0...v1.1.1
