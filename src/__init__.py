@@ -5,4 +5,4 @@
     python -m src.cli plan --city 成都 --keyword 春熙路 --headcount 8 --budget 400
 """
 
-__version__ = "1.2.0"
+__version__ = "1.2.1"

@@ -3,6 +3,32 @@
 本项目变更记录遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 分类：
 `Added` / `Changed` / `Deprecated` / `Removed` / `Fixed` / `Security`。
 
+## [1.2.1] - 2026-10-27
+
+本版为技术债清理，**不改任何命令行为与输出格式**。
+
+### Fixed
+
+- **`load_local_env` 返回值语义**：此前 docstring 写「返回键名集合」，实际返回「值为空串的字典」。
+  现统一为 `Set[str]`，并明确「只返回值、不返回键值对」——调用方拿不到 Token 明文，
+  误写进日志或报告也不会泄漏。
+- **`docs/CONTRIBUTING.md` 目录树**：原称 `docs/` 存放「本文件、CHANGELOG 等」，实际 CHANGELOG
+  在仓库根目录。目录树已补全 `README.md` / `CHANGELOG.md` 并修正 `docs/` 描述。
+
+### Changed
+
+- **`MCP_INTEGRATION.md` §2 增加工具数对照表**：此前「服务端 35 个」与「本项目接入 15 个」
+  两个数字并存、靠正文区分，读者易混用。现以表格列出「服务端总数 / 本项目接入 / 未接入」，
+  并给出「35 是服务端有什么，15 是本项目用了什么」的记忆口径。
+
+### Added
+
+- **`tests/test_config.py`**（6 项）：`.env` 解析、引号剥离、注释与非法行跳过、
+  默认不覆盖已有环境变量、`override=True` 覆盖、**返回值不含 Token 明文**。
+- **文档契约测试扩展**（2 项）：新增「`MCP_INTEGRATION` 的本项目接入数 == 业务层实际调用数」
+  与「对照表三个数字自洽（总数 − 接入 = 未接入）」，防止同类表述再次漂移。
+- 测试总数 99 → **107 项**。
+
 ## [1.2.0] - 2026-10-24
 
 ### Added
@@ -129,7 +155,8 @@
 - 活动标题改取 `articleDto.title`（`activityTitle` 实际为空）。
 - 城市未命中时不再静默取首个城市，避免把派对预约到异地。
 
-[Unreleased]: https://github.com/zcbacxc/mcd-party-planner/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/zcbacxc/mcd-party-planner/compare/v1.2.1...HEAD
+[1.2.1]: https://github.com/zcbacxc/mcd-party-planner/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/zcbacxc/mcd-party-planner/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/zcbacxc/mcd-party-planner/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/zcbacxc/mcd-party-planner/compare/v1.0.1...v1.1.0
