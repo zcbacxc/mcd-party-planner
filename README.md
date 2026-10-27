@@ -33,6 +33,15 @@ python -m src.cli plan --city 成都 --keyword 春熙路 --headcount 8 --budget 
 
 > 上为 **2026-10-20 真实调用**输出（有删节）。服务端菜单与价格按日轮换，复跑结果会不同——这属正常，不是模拟数据。
 
+**没有 Token 也能看效果**：仓库自带真实调用快照，回放不发任何请求。
+
+```bash
+python -m src.cli plan --city 成都 --keyword 春熙路 --headcount 8 --budget 400 \
+  --replay examples/2026-10-27-chengdu-8p-400-plan.json --format html > report.html
+```
+
+双击 `report.html` 即可离线查看（单文件、内联样式、零外链）。想录制自己的快照，在任意命令后加 `--record <path>`。
+
 三个场景如何串联：
 
 ```mermaid
@@ -64,7 +73,7 @@ flowchart LR
 | **主题活动预约** | 自动串联 `派对商品 → 城市 → 门店 → 日期 → 场次` 五级查询，输出可直接下单的载荷；**默认 dry_run，不真实下单** |
 | **活动日历组织建议** | 活动日历（往期 / 今日 / 未来）× 附近门店交叉，给出组织时机建议，并提示企业团餐助餐服务可用性 |
 
-设计原则：**数据全部实时取自麦当劳 MCP，仓库内不含任何静态菜单或价格快照**；用户输入（城市、关键词、人数、预算）仅存在于运行时内存、不落盘；其中**城市与关键词会随查询参数发往麦当劳 MCP**，除此之外不向任何第三方外发。
+设计原则：**数据全部实时取自麦当劳 MCP，仓库内不含任何静态菜单或价格快照**（`examples/` 里的录制快照仅用于离线回放，文件头明确标注「录制快照，非实时数据」）；用户输入（城市、关键词、人数、预算）仅存在于运行时内存、不落盘；其中**城市与关键词会随查询参数发往麦当劳 MCP**，除此之外不向任何第三方外发。
 
 > 调用层内置滑动窗口节流器（默认 300 次/分钟，官方上限 600）与 429 指数退避，批量比对不会触发限流。
 
@@ -222,16 +231,21 @@ mcd-party-planner/
 ├── mcp-config.example.json    # 脱敏 MCP 配置示例（仅占位符）
 ├── workbuddy.md               # WorkBuddy 开发对话上下文
 ├── skill/SKILL.md             # WorkBuddy Skill 定义
+├── examples/                  # 真实调用录制快照（供 --replay 离线复现）
 ├── src/
 │   ├── mcp_client.py          # MCP 调用层：streamablehttp + Bearer + 节流 + 429 退避
 │   ├── party_planner.py       # 业务逻辑层：三个核心场景
+│   ├── replay.py              # 录制 / 回放传输层（与 _http_transport 同签名）
+│   ├── report.py              # 报告渲染：Markdown / 单文件 HTML（内联样式、零外链）
 │   ├── config.py              # 本地配置读取（Token 不入仓）
 │   └── cli.py                 # 命令行入口
 └── tests/
     ├── test_mcp_client.py     # 调用层单元测试
     ├── test_party_planner.py  # 业务层单元测试
-    ├── test_cli.py            # 命令行契约测试（参数、退出码、输出格式）
+    ├── test_cli.py            # 命令行契约测试（参数、退出码、输出格式、回放）
     ├── test_config.py         # 配置读取测试（.env 解析与覆盖规则）
+    ├── test_replay.py         # 录制 / 回放测试（往返一致、缺调用报错）
+    ├── test_report.py         # 报告渲染测试（HTML 转义、零外链）
     ├── test_docs.py           # 文档契约测试（工具数、测试数、版本号）
     └── smoke.py               # 真实 MCP 端到端冒烟（Token 缺失时自动跳过）
 ```
@@ -239,7 +253,7 @@ mcd-party-planner/
 ## 六、运行测试
 
 ```bash
-python -m unittest discover -s tests -p "test_*.py"   # 单元测试 107 项（无需 Token）
+python -m unittest discover -s tests -p "test_*.py"   # 单元测试 134 项（无需 Token）
 python tests/smoke.py                                  # 端到端冒烟（需真实 Token）
 ```
 

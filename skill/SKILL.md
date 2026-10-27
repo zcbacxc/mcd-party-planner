@@ -14,6 +14,8 @@ description: 基于麦当劳 MCP 的聚会/团餐组织助手。当用户需要�
 3. 仓库根目录存在 `.env`：`MCD_MCP_TOKEN=你的Token`（该文件已被 `.gitignore` 排除）。
 
 自检：`python -m src.cli selfcheck`
+（若暂无 Token，可跳过前置条件，直接看快照：`python -m src.cli plan --city 成都 --keyword 春熙路
+--headcount 8 --budget 400 --replay examples/2026-10-27-chengdu-8p-400-plan.json`）
 
 ## 使用流程
 
@@ -56,6 +58,10 @@ python -m src.cli calendar --city 成都 --keyword 春熙路
 - 金额以 ¥ 为单位、保留两位小数（服务端返回单位为分，已换算）；
 - 明确区分「预算内」与「超预算」；超预算方案也要给出以便对比，但推荐只从预算内选；
 - 餐品、价格、供应状态以麦当劳官方渠道实时结果为准；涉及营养/热量时提示仅供参考，不构成专业建议。
+- **需要发给用户一份可分享的结果时**，用 `--format md` 或 `--format html`：HTML 为单文件、
+  内联样式、零外链，可直接落盘发送；`--json` 仍等价于 `--format json`，适合二次加工。
+- **没有 Token 或只想演示效果时**，加 `--replay examples/<快照>.json` 回放仓库内真实录制快照
+  （不发请求）；回放结果是录制那一刻的数据，务必说明「快照，非实时」。
 
 ## 安全与合规
 

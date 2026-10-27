@@ -58,6 +58,22 @@ jobs:
           python -m src.cli plan --help
           python -m src.cli selfcheck
 
+      # 离线回放：显式清掉 Token，确保「无 Token 也能看效果」这条路径不会悄悄腐化。
+      # 快照本身入库，因此这一步在 5 个 Python 版本上都能跑，不消耗 MCP 配额。
+      - name: Offline replay without token
+        run: |
+          env -u MCD_MCP_TOKEN python -m src.cli plan \
+            --city 成都 --keyword 春熙路 --headcount 8 --budget 400 \
+            --replay examples/2026-10-27-chengdu-8p-400-plan.json > /tmp/replay.txt
+          grep -q "团餐方案" /tmp/replay.txt
+          env -u MCD_MCP_TOKEN python -m src.cli calendar \
+            --city 成都 --keyword 春熙路 \
+            --replay examples/2026-10-27-chengdu-calendar.json --format html > /tmp/report.html
+          grep -q "活动日历组织建议" /tmp/report.html
+          if grep -q "https://" /tmp/report.html; then
+            echo "HTML 报告出现外部链接，离线可打开的前提被破坏"; exit 1
+          fi
+
   # 真实 MCP 端到端冒烟：需要 Token，未配置该 Secret 时自动跳过（脚本以 0 退出）
   #
   # 注意：`secrets` 上下文在 `jobs.<job_id>.if` 中不可用（仅 github/needs/vars/inputs），

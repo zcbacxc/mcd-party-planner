@@ -8,6 +8,11 @@
 - plan    ：场景 1 团餐方案生成
 - party   ：场景 2 主题活动预约（默认 dry_run，不真实下单）
 - calendar：场景 3 活动日历组织建议
+
+通用能力（plan / party / calendar）：
+- `--format {text,json,md,html}`：md / html 为可分享报告（HTML 单文件、零外链）；
+- `--record PATH`：把本次真实往返写入快照，供他人离线复现；
+- `--replay PATH`：读快照回放，不发请求、不需要 Token。
 """
 
 from __future__ import annotations
@@ -19,11 +24,14 @@ import sys
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
-from . import __version__, config, party_planner
-from .mcp_client import McpClient, McpError, OFFICIAL_RATE_LIMIT_PER_MINUTE
+from . import __version__, config, party_planner, replay, report
+from .mcp_client import (McpClient, McpError, OFFICIAL_RATE_LIMIT_PER_MINUTE,
+                         _http_transport)
 
 # 允许携带 Bearer Token 的接入地址：https + mcd.cn 域（避免 Token 被引导到任意主机）
 TRUSTED_ENDPOINT_HOST = "mcd.cn"
+
+FORMAT_CHOICES = ("text", "json", "md", "html")
 
 
 def is_trusted_endpoint(endpoint: str) -> bool:
@@ -37,8 +45,26 @@ def is_trusted_endpoint(endpoint: str) -> bool:
 
 def build_client(args: argparse.Namespace) -> McpClient:
     config.load_local_env(os.getcwd())
+    replay_path = getattr(args, "replay", None)
+    record_path = getattr(args, "record", None)
+    if replay_path and record_path:
+        raise ValueError("--record 与 --replay 不能同时使用")
+
     endpoint = args.endpoint or os.environ.get("MCD_MCP_ENDPOINT") or ""
-    if endpoint and not is_trusted_endpoint(endpoint) \
+    transport = None
+    if replay_path:
+        if not os.path.isfile(replay_path):
+            raise ValueError(f"回放文件不存在：{replay_path}")
+        try:
+            transport = replay.ReplayTransport.from_file(replay_path)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"回放文件不是合法 JSON：{replay_path}（{exc}）") from exc
+        endpoint = endpoint or transport.endpoint
+    elif record_path:
+        transport = replay.RecordingTransport(_http_transport, record_path, endpoint=endpoint)
+
+    # 回放模式不发任何请求，端点校验无意义；其余情况仍要求受信端点
+    if transport is None and endpoint and not is_trusted_endpoint(endpoint) \
             and not getattr(args, "allow_custom_endpoint", False):
         raise ValueError(
             f"接入地址 {endpoint} 不在受信范围（https://*.mcd.cn）；"
@@ -48,22 +74,49 @@ def build_client(args: argparse.Namespace) -> McpClient:
         endpoint=args.endpoint,
         rate_limit_per_minute=args.rate_limit,
         timeout=args.timeout,
+        transport=transport,
     )
     # 挂到 args 上，便于 main() 在 finally 中终止会话（不依赖全局变量）
     args.client = client
     return client
 
 
-def require_token(client: McpClient) -> None:
+def require_token(client: McpClient, args: Optional[argparse.Namespace] = None) -> None:
+    """回放模式不需要 Token（不产生网络请求），其余模式必须有。"""
+    if getattr(args, "replay", None) if args is not None else False:
+        return
     if not client.has_token:
         print(
             "错误：未检测到 MCP Token。\n"
             "请先申请麦当劳 MCP Token，并在仓库根目录创建 .env：\n"
             "    MCD_MCP_TOKEN=你的Token\n"
-            "（.env 已被 .gitignore 排除，绝不会提交到仓库）",
+            "（.env 已被 .gitignore 排除，绝不会提交到仓库）\n"
+            "没有 Token 也可以看效果：加 --replay examples/<快照>.json",
             file=sys.stderr,
         )
         raise SystemExit(2)
+
+
+def format_of(args: argparse.Namespace) -> str:
+    """输出格式：显式 `--format` 优先，其次兼容旧写法 `--json`，默认 text。"""
+    chosen = getattr(args, "format", None)
+    if chosen:
+        return str(chosen)
+    return "json" if getattr(args, "json", False) else "text"
+
+
+def emit(result: Any, args: argparse.Namespace, scenario: str,
+         renderer: Any) -> None:
+    """按 `--format` 输出：text 走既有报告，json/md/html 走新渲染。"""
+    fmt = format_of(args)
+    if fmt == "json":
+        print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+    elif fmt == "md":
+        print(report.to_markdown(scenario, result))
+    elif fmt == "html":
+        print(report.to_html(scenario, result))
+    else:
+        print(renderer(result))
 
 
 def cmd_version(args: argparse.Namespace) -> int:
@@ -77,8 +130,14 @@ def cmd_selfcheck(args: argparse.Namespace) -> int:
     print("=== 环境自检 ===")
     for key, value in info.items():
         print(f"{key}: {value}")
+    replay_path = getattr(args, "replay", None)
+    if replay_path:
+        print(f"回放模式：{replay_path}（不发真实请求，无需 Token）")
+        print("结论：回放模式可用，将直接读取快照中的响应")
+        return 0
     print("结论：" + ("Token 已就绪，可执行真实调用" if info["MCD_MCP_TOKEN"] == "已配置"
-                     else "Token 缺失，需先申请（入口：https://open.mcd.cn/mcp）"))
+                     else "Token 缺失，需先申请（入口：https://open.mcd.cn/mcp）；"
+                          "或加 --replay examples/<快照>.json 离线查看效果"))
     return 0
 
 
@@ -108,43 +167,34 @@ def cmd_probe(args: argparse.Namespace) -> int:
 
 def cmd_plan(args: argparse.Namespace) -> int:
     client = build_client(args)
-    require_token(client)
+    require_token(client, args)
     result = party_planner.plan_group_meal(
         client, city=args.city, keyword=args.keyword, headcount=args.headcount,
         budget=args.budget, store_limit=args.store_limit,
     )
-    if args.json:
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-    else:
-        print(party_planner.render_group_meal_report(result))
+    emit(result, args, "plan", party_planner.render_group_meal_report)
     return 0
 
 
 def cmd_party(args: argparse.Namespace) -> int:
     client = build_client(args)
-    require_token(client)
+    require_token(client, args)
     result = party_planner.plan_party_booking(
         client, city_name=args.city, spu_id=args.spu_id, date=args.date,
         count=args.headcount, party_type=args.party_type, dry_run=not args.confirm,
     )
-    if args.json:
-        print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
-    else:
-        print(party_planner.render_party_report(result))
+    emit(result, args, "party", party_planner.render_party_report)
     return 0
 
 
 def cmd_calendar(args: argparse.Namespace) -> int:
     client = build_client(args)
-    require_token(client)
+    require_token(client, args)
     result = party_planner.suggest_calendar_plan(
         client, city=args.city, keyword=args.keyword, store_limit=args.store_limit,
         specified_date=args.date,
     )
-    if args.json:
-        print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
-    else:
-        print(party_planner.render_calendar_report(result))
+    emit(result, args, "calendar", party_planner.render_calendar_report)
     return 0
 
 
@@ -157,6 +207,17 @@ def add_common(parser: argparse.ArgumentParser) -> None:
                         help="在 stderr 输出调用统计（次数 / 重试 / 限流等待 / 耗时）")
     parser.add_argument("--allow-custom-endpoint", action="store_true",
                         help="允许把 Token 发往非 https://*.mcd.cn 的地址（仅调试用）")
+    parser.add_argument("--record", default=None, metavar="PATH",
+                        help="把本次所有 MCP 往返写入快照文件，供他人 --replay 离线复现")
+    parser.add_argument("--replay", default=None, metavar="PATH",
+                        help="从快照文件回放，不发真实请求（无需 Token）")
+
+
+def add_output(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--format", choices=FORMAT_CHOICES, default=None,
+                        help="输出格式，默认 text；md / html 为可分享报告")
+    parser.add_argument("--json", action="store_true",
+                        help="等价于 --format json（保留旧写法）")
 
 
 def make_parser() -> argparse.ArgumentParser:
@@ -172,6 +233,8 @@ def make_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_version)
 
     p = sub.add_parser("selfcheck", help="环境自检")
+    p.add_argument("--replay", default=None, metavar="PATH",
+                   help="指定回放快照时，自检只提示回放模式，不要求 Token")
     p.set_defaults(func=cmd_selfcheck)
 
     p = sub.add_parser("tools", help="列出服务端工具")
@@ -188,7 +251,7 @@ def make_parser() -> argparse.ArgumentParser:
     p.add_argument("--headcount", type=int, required=True, help="人数")
     p.add_argument("--budget", type=float, required=True, help="总预算（元）")
     p.add_argument("--store-limit", type=int, default=3, help="最多比对的门店数")
-    p.add_argument("--json", action="store_true", help="输出 JSON")
+    add_output(p)
     add_common(p)
     p.set_defaults(func=cmd_plan)
 
@@ -199,7 +262,7 @@ def make_parser() -> argparse.ArgumentParser:
     p.add_argument("--headcount", type=int, default=5, help="参与人数")
     p.add_argument("--party-type", type=int, default=1, help="派对类型：1-包场，2-拼团")
     p.add_argument("--confirm", action="store_true", help="真实下单；不加则为 dry_run 演示")
-    p.add_argument("--json", action="store_true", help="输出 JSON")
+    add_output(p)
     add_common(p)
     p.set_defaults(func=cmd_party)
 
@@ -208,7 +271,7 @@ def make_parser() -> argparse.ArgumentParser:
     p.add_argument("--keyword", required=True, help="门店关键词，如 春熙路")
     p.add_argument("--store-limit", type=int, default=3, help="参考门店数")
     p.add_argument("--date", default=None, help="锚点日期，格式 2026-10-16；默认当月")
-    p.add_argument("--json", action="store_true", help="输出 JSON")
+    add_output(p)
     add_common(p)
     p.set_defaults(func=cmd_calendar)
 

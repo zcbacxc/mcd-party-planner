@@ -283,5 +283,58 @@ class VerboseTest(unittest.TestCase):
         self.assertTrue(client.closed, "退出时必须终止会话")
 
 
+class ReplayCliTest(unittest.TestCase):
+    """回放模式的端到端契约：不注入替身、不走网络，直接读仓库内的示例快照。"""
+
+    SNAPSHOT = os.path.join("examples", "2026-10-27-chengdu-8p-400-plan.json")
+    ARGS = ["--city", "成都", "--keyword", "春熙路", "--headcount", "8", "--budget", "400"]
+
+    def run_real(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.dict(os.environ, {}, clear=False), \
+                redirect_stdout(out), redirect_stderr(err):
+            os.environ.pop("MCD_MCP_TOKEN", None)
+            try:
+                code = cli.main(argv)
+            except SystemExit as exc:
+                code = int(exc.code or 0)
+        return code, out.getvalue(), err.getvalue()
+
+    def test_replay_runs_without_token(self):
+        code, out, err = self.run_real(["plan"] + self.ARGS + ["--replay", self.SNAPSHOT])
+        self.assertEqual(code, 0, err)
+        self.assertIn("【团餐方案】", out)
+        self.assertIn("¥342.4", out)
+
+    def test_format_json_matches_legacy_flag(self):
+        _, md_out, _ = self.run_real(["plan"] + self.ARGS +
+                                     ["--replay", self.SNAPSHOT, "--format", "json"])
+        _, json_out, _ = self.run_real(["plan"] + self.ARGS +
+                                       ["--replay", self.SNAPSHOT, "--json"])
+        self.assertEqual(json.loads(md_out), json.loads(json_out))
+        self.assertIn("recommended", json.loads(md_out))
+
+    def test_format_markdown_and_html(self):
+        _, md, _ = self.run_real(["plan"] + self.ARGS +
+                                 ["--replay", self.SNAPSHOT, "--format", "md"])
+        self.assertTrue(md.startswith("# 团餐方案"))
+        _, page, _ = self.run_real(["plan"] + self.ARGS +
+                                   ["--replay", self.SNAPSHOT, "--format", "html"])
+        self.assertTrue(page.startswith("<!DOCTYPE html>"))
+        self.assertNotIn("https://", page)
+
+    def test_missing_snapshot_exits_2(self):
+        code, _, err = self.run_real(["plan"] + self.ARGS +
+                                     ["--replay", "examples/not-exists.json"])
+        self.assertEqual(code, 2)
+        self.assertIn("回放文件不存在", err)
+
+    def test_record_and_replay_conflict_exits_2(self):
+        code, _, err = self.run_real(["plan"] + self.ARGS +
+                                     ["--replay", self.SNAPSHOT, "--record", "x.json"])
+        self.assertEqual(code, 2)
+        self.assertIn("不能同时使用", err)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

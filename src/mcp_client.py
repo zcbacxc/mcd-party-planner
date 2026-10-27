@@ -358,9 +358,20 @@ class McpClient:
         return bool(result)
 
     # -- 工具 ---------------------------------------------------------------
+    def _should_auto_initialize(self) -> bool:
+        """是否需要先握手。
+
+        默认传输必握手；自定义传输（测试替身）默认不握手，避免打乱其预设的调用序列；
+        录制 / 回放传输显式声明 `auto_initialize = True`，因为它们同样需要 `initialize`
+        才能拿到协议版本与工具清单。
+        """
+        if self._transport is _http_transport:
+            return True
+        return bool(getattr(self._transport, "auto_initialize", False))
+
     def list_tools(self) -> List[Dict[str, Any]]:
         """列出全部工具，按 `nextCursor` 翻页（当前服务端一页返回 35 个，无 cursor）。"""
-        if not self.initialized and self._transport is _http_transport:
+        if not self.initialized and self._should_auto_initialize():
             self.initialize()
         tools: List[Dict[str, Any]] = []
         cursor: Optional[str] = None
@@ -380,7 +391,7 @@ class McpClient:
         重试策略按工具是否幂等自动区分：`WRITE_TOOLS` 中的工具（下单 / 建址 /
         核销等）遇 5xx 不重试，避免重复产生副作用；显式传 `idempotent` 可覆盖。
         """
-        if not self.initialized and self._transport is _http_transport:
+        if not self.initialized and self._should_auto_initialize():
             self.initialize()
         if idempotent is None:
             idempotent = name not in WRITE_TOOLS
